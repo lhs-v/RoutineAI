@@ -29,7 +29,16 @@ class CollectWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 
             val net = NetworkCollector(applicationContext)
             net.recordCurrentNetwork()
-            net.collectUsage(res.windowFrom, now)
+
+            val dao = com.routineai.data.Db.get(applicationContext).dao()
+            if (dao.get(KEY_NET_BACKFILLED) == null) {
+                // 통신량은 시스템이 몇 달치 들고 있는 경우가 많다.
+                // 첫 실행에 한 번 긁어두면 설치 직후에도 과거 패턴을 볼 수 있다.
+                net.backfill(now)
+                dao.put(com.routineai.data.KvRow(KEY_NET_BACKFILLED, now.toString()))
+            } else {
+                net.collectUsage(res.windowFrom, now)
+            }
 
             Log.i(TAG, "수집 완료: 이번 ${res.scanned}건, 누적 ${res.totalStored}건")
             Result.success()
@@ -42,6 +51,7 @@ class CollectWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
     companion object {
         private const val TAG = "CollectWorker"
         private const val NAME = "routine-collect"
+        const val KEY_NET_BACKFILLED = "net_backfilled"
 
         fun schedule(ctx: Context) {
             val req = PeriodicWorkRequestBuilder<CollectWorker>(6, TimeUnit.HOURS)

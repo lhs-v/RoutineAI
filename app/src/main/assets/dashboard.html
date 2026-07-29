@@ -266,6 +266,19 @@ window.renderReport=function(D){
       cs("--s2"),120);
   }
 
+  /* 외출 지표 — SSID 없이도 계산되므로 설치 전 구간까지 소급된다 */
+  if((D.outingByWeekday||[]).length){
+    add(`<h2>외출 지표 — 요일별</h2><div class="card"><figure>
+      <div class="legend"><span><i style="background:var(--s1)"></i>평일</span>
+      <span><i style="background:var(--s4)"></i>주말</span></div>
+      <div id="c_out"></div>
+      <figcaption>낮(09–19시)에 <b>이동통신</b>으로 통신한 비율. 100%에 가까울수록 하루 종일 Wi-Fi 밖,
+      0%에 가까울수록 Wi-Fi 안에 있었다는 뜻입니다. 관측일 ${D.outing.length}일.
+      기기가 어느 망에 붙어 있었는지일 뿐, 사람이 어디 있었는지는 알 수 없습니다.</figcaption>
+    </figure></div>`);
+    outingChart($("c_out"),D.outingByWeekday);
+  }
+
   /* 장소 */
   if(D.places.length){
     add(`<h2>네트워크 체류</h2><div class="card"><figure><div id="c_pl"></div>
@@ -277,7 +290,7 @@ window.renderReport=function(D){
   }
 
   /* 검산 */
-  add(`<h2>검산</h2><div class="card"><div class="scroll"><table><tbody>
+  add(`<h2>검산</h2><div class="card"><table class="kv"><tbody>
     <tr><td>세션 기준 하루 화면 시간</td><td>${q.screenMinutesFromSessions}분</td></tr>
     <tr><td>앱 사용 시간 합계</td><td>${q.screenMinutesFromApps}분</td></tr>
     <tr><td>차이 (0 이상이어야 정상)</td>
@@ -286,7 +299,7 @@ window.renderReport=function(D){
     <tr><td>중복 제거한 이벤트</td><td>${q.duplicateEventsDropped}건</td></tr>
     <tr><td>동시 실행으로 제외한 이벤트</td><td>${q.coUseEventsExcluded}건</td></tr>
     <tr><td>3초 미만으로 버린 점등</td><td>${q.shortWakesDropped}회</td></tr>
-  </tbody></table></div>
+  </tbody></table>
   <p class="empty">차이는 잠금화면·알림창처럼 앱 전환이 없던 구간입니다. 음수면 집계 오류입니다.</p>
   </div>`);
 
@@ -321,6 +334,28 @@ function diagBlock(add,dg,q){
         `<tr><td>${k}</td><td>${v.toLocaleString()}건</td></tr>`).join("")||
         '<tr><td colspan="2">없음</td></tr>'
     }</tbody></table></div>`);
+}
+
+function outingChart(host,d){
+  const W=520,L=34,R=10,T=14,B=30,H=190;
+  const s=svgIn(host,W,H),iw=W-L-R,ih=H-T-B,bw=iw/d.length;
+  for(let i=0;i<=4;i++){const y=T+ih-ih*i/4;
+    el("line",{x1:L,x2:W-R,y1:y,y2:y,class:"gl"},s);
+    el("text",{x:L-6,y:y+3,"text-anchor":"end",class:"tick"},s).textContent=(25*i)+"%";}
+  d.forEach((x,i)=>{
+    const hh=x.meanShare/100*ih,px=L+i*bw+6,w=bw-12,y=T+ih-hh;
+    const c=x.isWeekend?cs("--s4"):cs("--s1");
+    if(hh>0){el("rect",{x:px,y,width:w,height:hh,rx:3,fill:c},s);
+      if(hh>3)el("rect",{x:px,y:y+hh-3,width:w,height:3,fill:c},s);}
+    const inside=hh>22;
+    const lab=el("text",{x:px+w/2,y:inside?y+14:y-5,"text-anchor":"middle",
+      class:"vlab"},s);
+    if(inside)lab.setAttribute("fill","#fff");
+    lab.textContent=Math.round(x.meanShare)+"%";
+    el("text",{x:px+w/2,y:H-16,"text-anchor":"middle",class:"tick"},s).textContent=x.weekday;
+    el("text",{x:px+w/2,y:H-5,"text-anchor":"middle",class:"tick"},s).textContent=x.days+"일";
+  });
+  el("line",{x1:L,x2:W-R,y1:T+ih,y2:T+ih,class:"bl"},s);
 }
 
 function median(a){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;

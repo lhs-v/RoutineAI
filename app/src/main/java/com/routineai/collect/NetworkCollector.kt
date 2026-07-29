@@ -24,7 +24,16 @@ class NetworkCollector(private val ctx: Context) {
 
     private val dao = Db.get(ctx).dao()
 
-    /** 앱별 통신량을 Wi-Fi/모바일로 나눠 저장 */
+    /**
+     * 앱별 통신량을 Wi-Fi/모바일로 나눠, **시간 버킷을 유지한 채** 저장한다.
+     *
+     * querySummary() 를 쓰면 안 된다 — 기간 전체를 하나로 뭉개서 시계열이 사라진다.
+     * queryDetails() 는 시스템이 보관 중인 버킷 경계를 그대로 돌려주므로
+     * 설치 직후에도 과거 수십 일치 "Wi-Fi 밖에 있었는가" 를 재구성할 수 있다.
+     *
+     * SSID 는 어느 쪽으로도 얻을 수 없다(시스템 전용). 장소 별칭은
+     * [recordCurrentNetwork] 가 설치 시점부터 따로 쌓는다.
+     */
     suspend fun collectUsage(from: Long, to: Long) {
         val nsm = ctx.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
         listOf(
@@ -32,12 +41,13 @@ class NetworkCollector(private val ctx: Context) {
             ConnectivityManager.TYPE_MOBILE to TRANSPORT_MOBILE,
         ).forEach { (type, transport) ->
             try {
-                val stats = nsm.querySummary(type, null, from, to)
+                val stats = nsm.queryDetails(type, null, from, to)
                 val bucket = NetworkStats.Bucket()
                 val rows = ArrayList<NetBucketRow>()
                 while (stats.hasNextBucket()) {
                     stats.getNextBucket(bucket)
                     if (bucket.rxBytes == 0L && bucket.txBytes == 0L) continue
+                    if (rows.size > MAX_ROWS_PER_RUN) break
                     rows.add(
                         NetBucketRow(
                             bucketStart = bucket.startTimeStamp,
@@ -91,9 +101,23 @@ class NetworkCollector(private val ctx: Context) {
         null
     }
 
+    /**
+     * 첫 실행 때 과거 구간을 한 번 긁는다.
+     * 시스템이 얼마나 들고 있는지는 기기마다 다르므로 넉넉히 요청하고 오는 만큼 쓴다.
+     */
+    suspend fun backfill(now: Long = System.currentTimeMillis()) {
+        collectUsage(now - BACKFILL_MS, now)
+    }
+
     companion object {
         const val TRANSPORT_MOBILE = 0
         const val TRANSPORT_WIFI = 1
         private const val TAG = "NetworkCollector"
+
+        /** 첫 실행 때 요청할 과거 범위 */
+        private const val BACKFILL_MS = 180L * 24 * 60 * 60 * 1000
+
+        /** 한 번에 담을 최대 행 수 (오래된 기기에서 폭주 방지) */
+        private const val MAX_ROWS_PER_RUN = 200_000
     }
 }

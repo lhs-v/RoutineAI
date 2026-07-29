@@ -214,6 +214,18 @@ class Analyzer(private val ctx: Context) {
         // ---- 장소 ----
         val places = places(netChanges, now)
 
+        onStep("외출 지표 계산 중")
+        val netBuckets = dao.net(now - 200L * 24 * 60 * 60 * 1000, now)
+        val outing = outing(netBuckets)
+        val outingWd = outing.groupBy { it.weekday }.map { (wd, list) ->
+            WeekdayOuting(
+                weekday = wd,
+                isWeekend = list.first().isWeekend,
+                meanShare = list.map { it.mobileShare }.average().r2(),
+                days = list.size,
+            )
+        }.sortedBy { WEEKDAY_ORDER.indexOf(it.weekday) }
+
         onStep("검산 중")
 
         // ---- 검산 ----
@@ -229,6 +241,10 @@ class Analyzer(private val ctx: Context) {
         if (sleep.size < 5) warnings += "수면 추정 표본이 ${sleep.size}일뿐입니다."
         if (!Permissions.hasNotificationAccess(ctx)) {
             warnings += "알림 접근이 꺼져 있어 알림 통계가 비어 있습니다."
+        }
+        if (netBuckets.isEmpty()) {
+            warnings += "통신량 기록이 없어 외출 지표를 만들 수 없습니다. " +
+                "수집을 한 번 더 실행하거나 READ_PHONE_STATE 권한을 확인하세요."
         }
         if (netChanges.isEmpty()) {
             warnings += "네트워크 변경 기록이 없습니다. 장소 축을 만들 수 없습니다."
@@ -263,6 +279,7 @@ class Analyzer(private val ctx: Context) {
             transitions = transitions, coUse = coUse, firstApps = first,
             notifByApp = notifByApp, sessionAppCount = sessionAppCount,
             places = places, timeFixed = timeFixed,
+            outing = outing, outingByWeekday = outingWd,
             quality = Quality(
                 screenMinutesFromSessions = screenFromSessions.r2(),
                 screenMinutesFromApps = screenFromApps.r2(),
@@ -406,6 +423,37 @@ class Analyzer(private val ctx: Context) {
         }
     }
 
+    /**
+     * 낮(09~19시) 시간 버킷마다 모바일 바이트와 Wi-Fi 바이트를 견주어
+     * 모바일이 우세했던 버킷의 비율을 낸다.
+     *
+     * 하루에 관측 버킷이 3개 미만이면 표본이 모자라 제외한다.
+     */
+    private fun outing(rows: List<com.routineai.data.NetBucketRow>): List<OutingStat> {
+        if (rows.isEmpty()) return emptyList()
+        // (날짜, 버킷) -> transport 별 바이트
+        val cell = HashMap<Pair<LocalDate, Long>, LongArray>()
+        for (r in rows) {
+            val ldt = r.bucketStart.toLocalDateTime()
+            if (ldt.hour !in 9..18) continue
+            val key = ldt.toLocalDate() to (r.bucketStart / BUCKET_MS)
+            val arr = cell.getOrPut(key) { LongArray(2) }
+            arr[r.transport] += r.rxBytes + r.txBytes
+        }
+        return cell.entries.groupBy { it.key.first }
+            .filter { it.value.size >= 3 }
+            .map { (d, buckets) ->
+                val mobile = buckets.count { it.value[0] > it.value[1] }
+                OutingStat(
+                    date = d.toString(),
+                    weekday = d.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.KOREAN),
+                    isWeekend = d.dayOfWeek.value >= 6,
+                    mobileShare = (mobile.toDouble() / buckets.size * 100).r2(),
+                    bucketsObserved = buckets.size,
+                )
+            }.sortedBy { it.date }
+    }
+
     // ------------------------------------------------------------------
 
     private fun resolveLauncher(): String {
@@ -457,6 +505,9 @@ class Analyzer(private val ctx: Context) {
         else -> "기타 (type=${'$'}t)"
     }
 }
+
+private const val BUCKET_MS = 2L * 60 * 60 * 1000
+private val WEEKDAY_ORDER = listOf("월", "화", "수", "목", "금", "토", "일")
 
 // ---- 작은 통계 헬퍼 ----
 

@@ -22,6 +22,8 @@ data class Report(
     val sessionAppCount: List<CountStat>,
     val places: List<PlaceStat>,
     val timeFixed: List<TimeFixedStat>,
+    val outing: List<OutingStat>,
+    val outingByWeekday: List<WeekdayOuting>,
     val quality: Quality,
     val diagnostics: Diagnostics,
 )
@@ -135,6 +137,33 @@ data class PlaceStat(
     val nights: Int,
     val daytimeShare: Double,
     val totalHours: Double,
+)
+
+/**
+ * 외출 지표.
+ *
+ * 낮 시간대에 이동통신으로 통신한 비율. Wi-Fi 밖에 있었다는 뜻이다.
+ * SSID 없이도 계산되므로 앱 설치 전 구간까지 소급된다 —
+ * 시스템이 통신량 이력을 몇 달치 들고 있기 때문이다.
+ *
+ * 주의: 기기가 그 네트워크에 붙어 있었다는 것이지 사람이 어디 있었다는 증거는 아니다.
+ */
+@Serializable
+data class OutingStat(
+    val date: String,
+    val weekday: String,
+    val isWeekend: Boolean,
+    /** 낮 버킷 중 모바일이 우세했던 비율 (0~100) */
+    val mobileShare: Double,
+    val bucketsObserved: Int,
+)
+
+@Serializable
+data class WeekdayOuting(
+    val weekday: String,
+    val isWeekend: Boolean,
+    val meanShare: Double,
+    val days: Int,
 )
 
 /** N일 중 n일 그 시간대에 그 앱을 열었는지 */
