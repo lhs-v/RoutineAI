@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RountineAI</title>
+<style>
+:root{
+  --surface-1:#fcfcfb; --plane:#f9f9f7;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --crit:#d03b3b;
+  color-scheme:light;
+}
+@media(prefers-color-scheme:dark){:root{
+  --surface-1:#1a1a19; --plane:#0d0d0d; --text-primary:#fff; --text-secondary:#c3c2b7;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--plane);color:var(--text-primary);
+  font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{padding:14px 12px 40px;max-width:900px;margin:0 auto}
+h2{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  margin:26px 0 10px;font-weight:600}
+h3{font-size:14.5px;margin:0 0 3px;font-weight:600}
+.card{background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:14px 15px}
+.grid{display:grid;gap:10px}
+.g2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:620px){.g2{grid-template-columns:1fr}}
+.chip{display:inline-block;padding:2px 8px;border:1px solid var(--border);border-radius:99px;
+  font-size:11px;color:var(--text-secondary);margin:0 5px 5px 0;background:var(--surface-1)}
+.stat .v{font-size:26px;font-weight:650;letter-spacing:-.02em;line-height:1.1}
+.stat .l{font-size:11.5px;color:var(--text-secondary);margin-top:2px}
+.stat .n{font-size:11px;color:var(--muted);margin-top:4px}
+figcaption{font-size:11.5px;color:var(--text-secondary);margin-top:8px}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.tick{font-size:9.5px;fill:var(--muted)}
+.vlab{font-size:9.5px;fill:var(--text-secondary)}
+.gl{stroke:var(--grid);stroke-width:1}
+.bl{stroke:var(--axis);stroke-width:1}
+table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.scroll table{min-width:430px;white-space:nowrap}
+th,td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--grid)}
+th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
+th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase}
+.warn{border-left:3px solid var(--crit);padding:8px 12px;background:var(--surface-1);
+  border-radius:0 8px 8px 0;margin-bottom:8px;font-size:12.5px;color:var(--text-secondary)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--text-secondary);margin-bottom:8px}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:4px}
+.empty{color:var(--muted);font-size:12.5px;padding:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <p class="empty">리포트를 생성하면 여기에 표시됩니다.</p>
+</div>
+
+<script>
+const NS="http://www.w3.org/2000/svg";
+const $=id=>document.getElementById(id);
+const el=(t,a={},p)=>{const n=document.createElementNS(NS,t);
+  for(const k in a)n.setAttribute(k,a[k]);if(p)p.appendChild(n);return n;};
+const cs=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hm=m=>String(Math.floor(m/60)%24).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+const r1=v=>Math.round(v*10)/10;
+
+function svgIn(host,w,h){host.innerHTML="";
+  const s=el("svg",{viewBox:`0 0 ${w} ${h}`,preserveAspectRatio:"xMidYMid meet"});
+  host.appendChild(s);return s;}
+
+/* ---------- 세로 막대 ---------- */
+function vbar(host,data,key,color,fmt){
+  const W=520,L=32,R=8,T=10,B=22,H=170;
+  const s=svgIn(host,W,H),max=Math.max(...data.map(d=>d[key]))||1;
+  const iw=W-L-R,ih=H-T-B,bw=iw/data.length;
+  for(let i=0;i<=3;i++){const y=T+ih-ih*i/3;
+    el("line",{x1:L,x2:W-R,y1:y,y2:y,class:"gl"},s);
+    el("text",{x:L-6,y:y+3,"text-anchor":"end",class:"tick"},s).textContent=r1(max*i/3);}
+  data.forEach((d,i)=>{
+    const v=d[key],hh=Math.max(v/max*ih,v>0?2:0),x=L+i*bw+1.2,w=bw-2.4,y=T+ih-hh;
+    if(hh>0){el("rect",{x,y,width:w,height:hh,rx:Math.min(3,w/2),fill:color},s);
+      if(hh>3)el("rect",{x,y:y+hh-3,width:w,height:3,fill:color},s);}
+    if(i%3===0)el("text",{x:L+i*bw+bw/2,y:H-6,"text-anchor":"middle",class:"tick"},s)
+      .textContent=fmt(d);
+  });
+  el("line",{x1:L,x2:W-R,y1:T+ih,y2:T+ih,class:"bl"},s);
+}
+
+/* ---------- 가로 막대 ---------- */
+function hbar(host,rows,color,labw,W){
+  W=W||520;const rh=22,T=4,L=labw,R=54,H=T+6+rows.length*rh;
+  const s=svgIn(host,W,H),max=Math.max(...rows.map(r=>r.v))||1,iw=W-L-R;
+  rows.forEach((r,i)=>{
+    const y=T+i*rh,w=Math.max(r.v/max*iw,2);
+    el("text",{x:L-7,y:y+rh/2+3.5,"text-anchor":"end",class:"vlab"},s).textContent=r.k;
+    el("rect",{x:L,y:y+4,width:w,height:rh-9,rx:3.5,fill:r.color||color},s);
+    if(w>3.5)el("rect",{x:L,y:y+4,width:3.5,height:rh-9,fill:r.color||color},s);
+    el("text",{x:L+w+6,y:y+rh/2+3.5,class:"vlab"},s).textContent=r.t;
+  });
+}
+
+/* ---------- 렌더 ---------- */
+window.renderReport=function(D){
+  const q=D.quality,m=D.meta;
+  const full=D.days.filter(d=>d.full);
+  const n=full.length||1;
+  const avg=(f)=>full.reduce((a,b)=>a+f(b),0)/n;
+  const root=$("root");
+  root.innerHTML="";
+
+  const add=(html)=>{const d=document.createElement("div");d.innerHTML=html;
+    root.appendChild(d);return d;};
+
+  /* 메타 */
+  add(`<div>${[
+    m.device, m.tz,
+    new Date(m.spanFrom).toISOString().slice(0,10)+" ~ "+new Date(m.spanTo).toISOString().slice(0,10),
+    "온전한 하루 "+m.fullDays.length+"일",
+    "부분일 "+m.partialDays.length+"일",
+    "이벤트 "+m.eventCount.toLocaleString()+"건",
+  ].map(t=>`<span class="chip">${t}</span>`).join("")}</div>`);
+
+  /* 품질 경고 — 맨 앞에 둔다 */
+  if(q.warnings.length||q.reconciliationDelta<0){
+    let w="";
+    if(q.reconciliationDelta<0)
+      w+=`<div class="warn"><b>집계 검산 실패</b> — 앱 사용 시간 합계(${q.screenMinutesFromApps}분)가
+        화면 시간(${q.screenMinutesFromSessions}분)을 넘습니다. 이 리포트의 앱 지표를 신뢰하지 마세요.</div>`;
+    q.warnings.forEach(x=>{w+=`<div class="warn">${x}</div>`});
+    add(w);
+  }
+
+  /* 요약 */
+  add(`<h2>${m.fullDays.length}일 평균</h2>`);
+  const hero=[
+    {v:r1(avg(d=>d.screenMinutes)/60)+"시간",l:"하루 화면 사용",
+     n:`평일 ${q.weekdayCount}일 · 주말 ${q.weekendCount}일`},
+    {v:Math.round(avg(d=>d.wakes))+"회",l:"하루 화면 켠 횟수",
+     n:`30초 미만 ${Math.round(avg(d=>d.microWakes))}회 · 앱 미실행 ${Math.round(avg(d=>d.noAppWakes))}회`},
+    {v:Math.round(avg(d=>d.notifs))+"건",l:"하루 방해성 알림",
+     n:q.notifAccessGranted?"알림 접근 허용됨":"알림 접근 꺼짐 — 값 없음"},
+    {v:D.sleep.length?r1(median(D.sleep.map(s=>s.hours)))+"시간":"—",l:"폰을 놓은 구간 (중앙값)",
+     n:`관측 ${D.sleep.length}일`},
+  ];
+  add(`<div class="grid g2">${hero.map(i=>`<div class="card stat">
+    <div class="v">${i.v}</div><div class="l">${i.l}</div><div class="n">${i.n}</div>
+  </div>`).join("")}</div>`);
+
+  /* 날짜별 */
+  add(`<h2>날짜별 추이</h2><div class="card"><figure>
+    <div class="legend"><span><i style="background:var(--s1)"></i>평일</span>
+    <span><i style="background:var(--s4)"></i>주말</span>
+    <span><i style="background:var(--grid)"></i>부분 기록</span></div>
+    <div id="c_days"></div>
+    <figcaption>막대는 하루 화면 사용 시간(분). 부분 기록된 날은 평균 계산에서 제외했습니다.</figcaption>
+  </figure></div>`);
+  daysChart($("c_days"),D.days);
+
+  /* 하루 리듬 */
+  add(`<h2>하루 리듬</h2><div class="grid g2">
+    <div class="card"><figure><h3>시간대별 화면 사용 (분)</h3><div id="c_scr"></div></figure></div>
+    <div class="card"><figure><h3>시간대별 알림 (건)</h3><div id="c_ntf"></div></figure></div>
+  </div>`);
+  vbar($("c_scr"),D.hourly,"screenMinutes",cs("--s1"),d=>String(d.hour).padStart(2,"0"));
+  vbar($("c_ntf"),D.hourly,"notifs",cs("--s2"),d=>String(d.hour).padStart(2,"0"));
+
+  /* 수면 */
+  if(D.sleep.length){
+    add(`<h2>폰을 놓은 구간 — ${D.sleep.length}일</h2><div class="card"><figure>
+      <div id="c_sleep"></div>
+      <figcaption>폰을 놓은 시각부터 다시 켠 시각까지. 잠들었다는 증거가 아니라
+      <b>화면을 보지 않은 구간</b>입니다.</figcaption></figure></div>`);
+    sleepChart($("c_sleep"),D.sleep);
+  }
+
+  /* 앱 */
+  if(D.apps.length){
+    add(`<h2>앱별 하루 사용 시간</h2><div class="card"><figure>
+      <div id="c_apps"></div>
+      <figcaption>가로선은 최소~최대 범위, 점은 중앙값. 범위가 좁고 사용일이 많을수록
+      매일 같은 양을 쓰는 습관입니다.</figcaption></figure>
+      <div id="t_apps" class="scroll" style="margin-top:10px"></div></div>`);
+    appsChart($("c_apps"),D.apps.slice(0,12),m.fullDays.length);
+    $("t_apps").innerHTML=`<table><thead><tr><th>앱</th><th>중앙값</th><th>평균</th>
+      <th>범위</th><th>사용일</th><th>1회</th></tr></thead><tbody>`+
+      D.apps.slice(0,12).map(a=>`<tr><td>${a.label}</td><td>${a.medianMinutes}분</td>
+      <td>${a.meanMinutes}분</td><td>${a.minMinutes}~${a.maxMinutes}분</td>
+      <td>${a.daysUsed}/${m.fullDays.length}일</td><td>${a.secondsPerLaunch}초</td></tr>`).join("")
+      +`</tbody></table>`;
+  }
+
+  /* 전환 · 동시 사용 */
+  add(`<h2>앱 이동</h2><div class="grid g2">
+    <div class="card"><figure><h3>앱→앱 전환 (홈·동시실행 제외)</h3><div id="c_tr"></div>
+      <figcaption>주황은 홈 화면을 거친 횟수입니다.</figcaption></figure></div>
+    <div class="card"><figure><h3>분할화면 동시 사용</h3><div id="c_co"></div>
+      <figcaption>같은 시각에 함께 떠 있던 조합. 전환이 아니라 <b>동시 사용</b>입니다.</figcaption>
+    </figure></div>
+    <div class="card"><figure><h3>화면 켠 직후 첫 앱</h3><div id="c_fst"></div></figure></div>
+    <div class="card"><figure><h3>한 번 켤 때 쓴 앱 개수</h3><div id="c_cnt"></div></figure></div>
+  </div>`);
+  transChart($("c_tr"),D.transitions.slice(0,8));
+  if(D.coUse.length) hbar($("c_co"),D.coUse.slice(0,6).map(c=>
+    ({k:c.a+" ┃ "+c.b,v:c.count,t:c.count+"회 · "+c.distinctDays+"일"})),cs("--s3"),150);
+  else $("c_co").innerHTML='<p class="empty">동시 사용이 관측되지 않았습니다.</p>';
+  hbar($("c_fst"),D.firstApps.slice(0,7).map(x=>({k:x.key,v:x.count,t:x.count+"회"})),cs("--s4"),110);
+  hbar($("c_cnt"),D.sessionAppCount.map(x=>({k:x.key,v:x.count,t:x.count+"회"})),cs("--s1"),70);
+
+  /* 시각 고정성 */
+  if(D.timeFixed.length){
+    add(`<h2>시각이 고정된 앱 실행</h2><div class="card"><figure><div id="c_fix"></div>
+      <figcaption>관측일 중 며칠이나 그 시간대에 열었는지. 오른쪽 괄호는 하루 실행 횟수로,
+      자주 쓰는 앱일수록 우연히 높아지므로 함께 봐야 합니다.</figcaption></figure></div>`);
+    hbar($("c_fix"),D.timeFixed.slice(0,10).map(t=>({
+      k:t.label+" · "+String(t.hour).padStart(2,"0")+"시대",v:t.daysHit,
+      t:t.daysHit+"/"+t.daysObserved+"일 ("+r1(t.launchesPerDay)+"회/일)"})),cs("--s3"),150,540);
+  }
+
+  /* 알림 */
+  if(D.notifByApp.length){
+    add(`<h2>알림 발신 앱 (건/일)</h2><div class="card"><div id="c_np"></div></div>`);
+    hbar($("c_np"),D.notifByApp.slice(0,8).map(x=>({k:x.key,v:x.count,t:r1(x.count)+"건"})),
+      cs("--s2"),120);
+  }
+
+  /* 장소 */
+  if(D.places.length){
+    add(`<h2>네트워크 체류</h2><div class="card"><figure><div id="c_pl"></div>
+      <figcaption>앱 설치 이후 직접 기록한 값입니다. Wi-Fi 실제 이름 대신 별칭으로 표시합니다.
+      기기가 그 네트워크에 붙어 있었다는 뜻이지, 사람이 거기 있었다는 증거는 아닙니다.</figcaption>
+    </figure></div>`);
+    hbar($("c_pl"),D.places.slice(0,6).map(p=>({k:p.alias,v:p.totalHours,
+      t:r1(p.totalHours)+"시간 · 낮 "+r1(p.daytimeShare)+"%"})),cs("--s1"),110);
+  }
+
+  /* 검산 */
+  add(`<h2>검산</h2><div class="card"><div class="scroll"><table><tbody>
+    <tr><td>세션 기준 하루 화면 시간</td><td>${q.screenMinutesFromSessions}분</td></tr>
+    <tr><td>앱 사용 시간 합계</td><td>${q.screenMinutesFromApps}분</td></tr>
+    <tr><td>차이 (0 이상이어야 정상)</td>
+        <td style="color:${q.reconciliationDelta<0?"var(--crit)":"inherit"}">
+        ${q.reconciliationDelta}분</td></tr>
+    <tr><td>중복 제거한 이벤트</td><td>${q.duplicateEventsDropped}건</td></tr>
+    <tr><td>동시 실행으로 제외한 이벤트</td><td>${q.coUseEventsExcluded}건</td></tr>
+    <tr><td>3초 미만으로 버린 점등</td><td>${q.shortWakesDropped}회</td></tr>
+  </tbody></table></div>
+  <p class="empty">차이는 잠금화면·알림창처럼 앱 전환이 없던 구간입니다. 음수면 집계 오류입니다.</p>
+  </div>`);
+};
+
+function median(a){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;
+  return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+
+function daysChart(host,days){
+  const W=520,L=32,R=8,T=10,B=30,H=190;
+  const s=svgIn(host,W,H),max=Math.max(...days.map(d=>d.screenMinutes))||1;
+  const iw=W-L-R,ih=H-T-B,bw=iw/days.length;
+  for(let i=0;i<=3;i++){const y=T+ih-ih*i/3;
+    el("line",{x1:L,x2:W-R,y1:y,y2:y,class:"gl"},s);
+    el("text",{x:L-6,y:y+3,"text-anchor":"end",class:"tick"},s)
+      .textContent=Math.round(max*i/3/60)+"h";}
+  days.forEach((d,i)=>{
+    const hh=d.screenMinutes/max*ih,x=L+i*bw+2,w=bw-4,y=T+ih-hh;
+    const c=d.isWeekend?cs("--s4"):cs("--s1");
+    el("rect",{x,y,width:w,height:hh,rx:3,fill:c,opacity:d.full?1:.35},s);
+    if(i%2===0)el("text",{x:x+w/2,y:H-16,"text-anchor":"middle",class:"tick"},s)
+      .textContent=d.date.slice(5);
+    el("text",{x:x+w/2,y:H-5,"text-anchor":"middle",class:"tick"},s).textContent=d.weekday;
+  });
+  el("line",{x1:L,x2:W-R,y1:T+ih,y2:T+ih,class:"bl"},s);
+}
+
+function sleepChart(host,sleep){
+  const W=520,L=86,R=44,T=22,rh=22,H=T+sleep.length*rh+10;
+  const s=svgIn(host,W,H),iw=W-L-R,x0=20*60,x1=35*60;
+  const X=m=>L+(m-x0)/(x1-x0)*iw;
+  for(let m=x0;m<=x1;m+=180){
+    el("line",{x1:X(m),x2:X(m),y1:T-4,y2:T+sleep.length*rh,class:"gl"},s);
+    el("text",{x:X(m),y:T-9,"text-anchor":"middle",class:"tick"},s).textContent=hm(m%1440);}
+  sleep.forEach((n,i)=>{
+    const bt=n.startMinuteOfDay<720?n.startMinuteOfDay+1440:n.startMinuteOfDay;
+    const wt=n.endMinuteOfDay+1440,y=T+i*rh+rh/2;
+    el("text",{x:L-7,y:y+3.5,"text-anchor":"end",class:"vlab"},s)
+      .textContent=n.nightOf.slice(5)+"("+n.weekday+")";
+    const c=n.hours<5?cs("--crit"):n.hours<6.5?cs("--s4"):cs("--s3");
+    el("rect",{x:X(bt),y:y-6,width:Math.max(X(wt)-X(bt),3),height:12,rx:3.5,fill:c},s);
+    el("text",{x:X(wt)+6,y:y+3.5,class:"vlab"},s).textContent=r1(n.hours)+"h";
+  });
+}
+
+function appsChart(host,apps,nDays){
+  const W=540,L=104,R=88,T=8,rh=24,H=T+8+apps.length*rh;
+  const s=svgIn(host,W,H),max=Math.max(...apps.map(a=>a.maxMinutes))||1,iw=W-L-R;
+  apps.forEach((a,i)=>{
+    const y=T+i*rh+rh/2;
+    el("text",{x:L-7,y:y+3.5,"text-anchor":"end",class:"vlab"},s).textContent=a.label;
+    const c=a.daysUsed>=nDays*0.85?cs("--s1"):a.daysUsed>=nDays*0.5?cs("--s3"):cs("--s4");
+    el("line",{x1:L+a.minMinutes/max*iw,x2:L+a.maxMinutes/max*iw,y1:y,y2:y,
+      stroke:c,"stroke-width":2.5,"stroke-linecap":"round"},s);
+    el("circle",{cx:L+a.medianMinutes/max*iw,cy:y,r:4.5,fill:c,
+      stroke:cs("--surface-1"),"stroke-width":1.6},s);
+    el("text",{x:W-R+6,y:y+3.5,class:"vlab"},s)
+      .textContent=r1(a.medianMinutes)+"분 · "+a.daysUsed+"/"+nDays+"일";
+  });
+}
+
+function transChart(host,tr){
+  if(!tr.length){host.innerHTML='<p class="empty">전환이 관측되지 않았습니다.</p>';return;}
+  const W=540,L=168,R=86,T=4,rh=23,H=T+6+tr.length*rh;
+  const s=svgIn(host,W,H),max=Math.max(...tr.map(t=>t.count))||1,iw=W-L-R;
+  tr.forEach((t,i)=>{
+    const y=T+i*rh,direct=t.count-t.viaLauncher;
+    const wd=direct/max*iw,wv=t.viaLauncher/max*iw;
+    el("text",{x:L-7,y:y+rh/2+3.5,"text-anchor":"end",class:"vlab"},s)
+      .textContent=t.from+" → "+t.to;
+    if(wd>0){el("rect",{x:L,y:y+4,width:wd,height:rh-9,rx:3.5,fill:cs("--s1")},s);
+      el("rect",{x:L,y:y+4,width:Math.min(3.5,wd),height:rh-9,fill:cs("--s1")},s);}
+    if(wv>0)el("rect",{x:L+wd+2,y:y+4,width:Math.max(wv-2,1),height:rh-9,rx:3.5,
+      fill:cs("--s4")},s);
+    el("text",{x:L+wd+wv+6,y:y+rh/2+3.5,class:"vlab"},s)
+      .textContent=t.count+"회 · "+t.medianGapSeconds+"초";
+  });
+}
+</script>
+</body>
+</html>
