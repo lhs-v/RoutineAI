@@ -50,6 +50,8 @@ data class Diagnostics(
     val storedNotifs: Int,
     /** 이 기기가 usagestats 로 NOTIFICATION_INTERRUPTION 을 내주는가 (0 이면 안 줌) */
     val systemInterruptEvents: Int,
+    /** 알림 리스너가 처음 기록을 남긴 시각. 이 이전은 알림 데이터가 없다. */
+    val notifListenerSince: Long?,
     val netChangeRecords: Int,
     val usageAccessGranted: Boolean,
 )
@@ -88,6 +90,12 @@ data class DayStat(
      * 기기가 이 이벤트를 앱에 주지 않으면 0 이다.
      */
     val notifsSystemInterrupt: Int,
+    /**
+     * 이 날 알림 리스너가 켜져 있었는가.
+     * 리스너는 소급되지 않으므로, 켜기 전 날은 알림이 0 으로 보인다.
+     * 그 날들을 평균에 넣으면 알림 수가 실제보다 낮게 나온다.
+     */
+    val notifCovered: Boolean,
 )
 
 @Serializable

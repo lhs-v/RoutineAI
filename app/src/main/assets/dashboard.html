@@ -112,6 +112,10 @@ window.renderReport=function(D){
   const full=D.days.filter(d=>d.full);
   const n=full.length||1;
   const avg=(f)=>full.reduce((a,b)=>a+f(b),0)/n;
+  // 알림 리스너는 소급되지 않는다. 켜기 전 날을 평균에 넣으면 값이 낮게 나온다.
+  const notifDays=full.filter(d=>d.notifCovered);
+  const nn=notifDays.length||1;
+  const navg=(f)=>notifDays.reduce((a,b)=>a+f(b),0)/nn;
   const root=$("root");
   root.innerHTML="";
 
@@ -162,9 +166,9 @@ window.renderReport=function(D){
      n:`평일 ${q.weekdayCount}일 · 주말 ${q.weekendCount}일`},
     {v:Math.round(avg(d=>d.wakes))+"회",l:"하루 화면 켠 횟수",
      n:`30초 미만 ${Math.round(avg(d=>d.microWakes))}회 · 앱 미실행 ${Math.round(avg(d=>d.noAppWakes))}회`},
-    {v:Math.round(avg(d=>d.notifs))+"건",l:"하루 받은 알림 (전체)",
+    {v:Math.round(navg(d=>d.notifs))+"건",l:"하루 받은 알림 (전체)",
      n:q.notifAccessGranted
-        ? `방해 가능 ${Math.round(avg(d=>d.notifsInterruptive||0))}건 · 실제 방해 ${Math.round(avg(d=>d.notifsSystemInterrupt||0))}건`
+        ? `방해 가능 ${Math.round(navg(d=>d.notifsInterruptive||0))}건 · 실제 방해 ${Math.round(avg(d=>d.notifsSystemInterrupt||0))}건`
         : "알림 접근이 꺼져 있어 값이 비어 있습니다"},
     {v:D.sleep.length?r1(median(D.sleep.map(s=>s.hours)))+"시간":"—",l:"폰을 놓은 구간 (중앙값)",
      n:`관측 ${D.sleep.length}일`},
@@ -261,18 +265,27 @@ window.renderReport=function(D){
 
   /* 알림 */
   if(D.notifByApp.length){
-    const nAll=Math.round(avg(d=>d.notifs)),
-          nInt=Math.round(avg(d=>d.notifsInterruptive||0)),
+    const nAll=Math.round(navg(d=>d.notifs)),
+          nInt=Math.round(navg(d=>d.notifsInterruptive||0)),
           nSys=Math.round(avg(d=>d.notifsSystemInterrupt||0));
+    const since=dg.notifListenerSince
+      ? new Date(dg.notifListenerSince).toLocaleDateString("ko-KR",{month:"2-digit",day:"2-digit"})
+      : null;
     add(`<h2>알림</h2><div class="card">
       <table class="kv"><tbody>
-        <tr><td><b>전체</b> — 도착한 알림 (지속 알림 제외)</td><td>${nAll}건/일</td></tr>
-        <tr><td><b>방해 가능</b> — 채널 중요도가 기본 이상</td><td>${nInt}건/일</td></tr>
-        <tr><td><b>실제 방해</b> — 소리·진동·헤드업이 실제로 발생</td>
+        <tr><td><b>전체</b> — 도착한 알림 (지속 알림 제외)<br>
+            <span style="color:var(--muted)">알림 접근을 켠 뒤부터만 기록 ${
+              since?`· ${since}~ (${nn}일)`:"· 아직 없음"}</span></td>
+            <td>${nAll}건/일</td></tr>
+        <tr><td><b>방해 가능</b> — 채널 중요도가 기본 이상<br>
+            <span style="color:var(--muted)">위와 같은 범위</span></td><td>${nInt}건/일</td></tr>
+        <tr><td><b>실제 방해</b> — 소리·진동·헤드업이 실제로 발생<br>
+            <span style="color:var(--muted)">시스템 이벤트라 설치 전 며칠치까지 소급됨</span></td>
             <td>${dg.systemInterruptEvents ? nSys+"건/일" :
               '<span style="color:var(--muted)">이 기기는 제공 안 함</span>'}</td></tr>
       </tbody></table>
-      <p class="empty">세 값의 정의가 다릅니다. 다른 보고서와 비교할 때는 어느 정의인지 먼저 맞춰야 합니다.</p>
+      <p class="empty">세 값은 정의도, <b>수집 범위도</b> 다릅니다.
+      위 둘은 권한을 켠 뒤부터고 아래 하나만 소급됩니다. 다른 보고서와 비교할 때는 정의부터 맞춰야 합니다.</p>
       <div id="c_np" style="margin-top:10px"></div>
       <p class="empty">위 막대는 <b>전체</b> 기준입니다.</p>
     </div>`);

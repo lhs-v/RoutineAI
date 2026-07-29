@@ -83,6 +83,10 @@ class Analyzer(private val ctx: Context) {
         // 기기가 이 이벤트를 서드파티 앱에 주는지는 기기마다 달라서 진단에도 싣는다.
         val sysInterruptByDate = raw.filter { it.type == EVENT_NOTIFICATION_INTERRUPTION }
             .groupBy { it.ts.toLocalDate() }
+        // 리스너는 권한을 켠 뒤부터만 기록된다. 그 이전 날을 평균에 넣으면
+        // 알림 수가 실제보다 낮게 나오므로 날짜마다 표시해 둔다.
+        val notifSince = notifs.minOfOrNull { it.ts }
+        val notifSinceDate = notifSince?.toLocalDate()
         val dayStats = allDates.map { d ->
             val ss = sessByDate[d].orEmpty()
             DayStat(
@@ -97,6 +101,7 @@ class Analyzer(private val ctx: Context) {
                 notifs = notifByDate[d].orEmpty().size,
                 notifsInterruptive = notifIntByDate[d].orEmpty().size,
                 notifsSystemInterrupt = sysInterruptByDate[d].orEmpty().size,
+                notifCovered = notifSinceDate != null && !d.isBefore(notifSinceDate),
             )
         }
         val fullStats = dayStats.filter { it.full }
@@ -117,10 +122,12 @@ class Analyzer(private val ctx: Context) {
             }
         }
         val notifPerHour = DoubleArray(24)
-        liveNotifs.filter { it.ts.toLocalDate() in fullDates }
+        val notifDates = fullDates.filter { notifSinceDate != null && !it.isBefore(notifSinceDate) }
+        liveNotifs.filter { it.ts.toLocalDate() in notifDates }
             .forEach { notifPerHour[it.ts.toLocalDateTime().hour] += 1 }
+        val nNotifDays = notifDates.size.coerceAtLeast(1)
         val hourly = (0..23).map {
-            HourStat(it, screenPerHour[it] / nFull, notifPerHour[it] / nFull)
+            HourStat(it, screenPerHour[it] / nFull, notifPerHour[it] / nNotifDays)
         }
 
         onStep("앱별 사용 시간 계산 중")
@@ -211,10 +218,10 @@ class Analyzer(private val ctx: Context) {
         val timeFixed = timeFixed(raw, fullDates, launcher, system, apps)
 
         // ---- 알림 ----
-        val notifByApp = liveNotifs.filter { it.ts.toLocalDate() in fullDates }
+        val notifByApp = liveNotifs.filter { it.ts.toLocalDate() in notifDates }
             .groupingBy { it.pkg }.eachCount().entries
             .sortedByDescending { it.value }.take(10)
-            .map { CountStat(label(it.key), (it.value.toDouble() / nFull).r2()) }
+            .map { CountStat(label(it.key), (it.value.toDouble() / nNotifDays).r2()) }
 
         // ---- 장소 ----
         val places = places(netChanges, now)
@@ -246,6 +253,10 @@ class Analyzer(private val ctx: Context) {
         if (sleep.size < 5) warnings += "수면 추정 표본이 ${sleep.size}일뿐입니다."
         if (!Permissions.hasNotificationAccess(ctx)) {
             warnings += "알림 접근이 꺼져 있어 알림 통계가 비어 있습니다."
+        }
+        if (notifSinceDate != null && fullDates.any { it.isBefore(notifSinceDate) }) {
+            warnings += "알림 리스너는 ${notifSinceDate}부터 기록됐습니다. " +
+                "그 이전 날짜의 알림 수는 0으로 보이지만 실제로 0이었던 것은 아닙니다."
         }
         if (notifs.isEmpty() && raw.any { it.type == EVENT_NOTIFICATION_INTERRUPTION }) {
             warnings += "알림 리스너 기록은 없지만 시스템 방해 기록은 있습니다. " +
@@ -320,6 +331,7 @@ class Analyzer(private val ctx: Context) {
                 sessionSource = s.source,
                 storedNotifs = notifs.size,
                 systemInterruptEvents = raw.count { it.type == EVENT_NOTIFICATION_INTERRUPTION },
+                notifListenerSince = notifSince,
                 netChangeRecords = netChanges.size,
                 usageAccessGranted = Permissions.hasUsageAccess(ctx),
             ),
