@@ -1,4 +1,4 @@
-package com.rountineai.data
+package com.routineai.data
 
 import android.content.Context
 import androidx.room.Database
@@ -18,7 +18,7 @@ abstract class Db : RoomDatabase() {
         @Volatile private var instance: Db? = null
 
         fun get(ctx: Context): Db = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "rountine.db")
+            instance ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "routine.db")
                 .build().also { instance = it }
         }
     }

@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RountineAI"
+rootProject.name = "RoutineAI"
 include(":app")

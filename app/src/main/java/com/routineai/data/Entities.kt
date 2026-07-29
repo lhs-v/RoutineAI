@@ -1,4 +1,4 @@
-package com.rountineai.data
+package com.routineai.data
 
 import androidx.room.Entity
 import androidx.room.Index

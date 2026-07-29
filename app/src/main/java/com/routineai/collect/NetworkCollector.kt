@@ -1,4 +1,4 @@
-package com.rountineai.collect
+package com.routineai.collect
 
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
@@ -8,9 +8,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.util.Log
-import com.rountineai.data.Db
-import com.rountineai.data.NetBucketRow
-import com.rountineai.data.NetworkChangeRow
+import com.routineai.data.Db
+import com.routineai.data.NetBucketRow
+import com.routineai.data.NetworkChangeRow
 
 /**
  * 통신량과 접속 네트워크를 기록한다.

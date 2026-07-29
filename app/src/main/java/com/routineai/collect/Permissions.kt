@@ -1,4 +1,4 @@
-package com.rountineai.collect
+package com.routineai.collect
 
 import android.app.AppOpsManager
 import android.content.Context

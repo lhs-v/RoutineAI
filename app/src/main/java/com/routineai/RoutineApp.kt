@@ -1,9 +1,9 @@
-package com.rountineai
+package com.routineai
 
 import android.app.Application
-import com.rountineai.collect.CollectWorker
+import com.routineai.collect.CollectWorker
 
-class RountineApp : Application() {
+class RoutineApp : Application() {
     override fun onCreate() {
         super.onCreate()
         CollectWorker.schedule(this)

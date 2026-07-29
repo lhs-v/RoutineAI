@@ -1,14 +1,14 @@
-package com.rountineai.analysis
+package com.routineai.analysis
 
 import android.app.usage.UsageEvents
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.Intent
-import com.rountineai.collect.NetworkCollector
-import com.rountineai.collect.Permissions
-import com.rountineai.data.Db
-import com.rountineai.data.NotifEventRow
-import com.rountineai.data.UsageEventRow
+import com.routineai.collect.NetworkCollector
+import com.routineai.collect.Permissions
+import com.routineai.data.Db
+import com.routineai.data.NotifEventRow
+import com.routineai.data.UsageEventRow
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -306,10 +306,10 @@ class Analyzer(private val ctx: Context) {
      * 네트워크 변경 기록으로 체류를 만든다.
      * SSID 는 그대로 두지 않고 등장 순서대로 별칭을 준다 — 화면에 실제 이름을 띄우지 않기 위해서.
      */
-    private fun places(changes: List<com.rountineai.data.NetworkChangeRow>, now: Long): List<PlaceStat> {
+    private fun places(changes: List<com.routineai.data.NetworkChangeRow>, now: Long): List<PlaceStat> {
         if (changes.isEmpty()) return emptyList()
         val alias = HashMap<String, String>()
-        fun aliasOf(r: com.rountineai.data.NetworkChangeRow): String = when (r.kind) {
+        fun aliasOf(r: com.routineai.data.NetworkChangeRow): String = when (r.kind) {
             "wifi" -> alias.getOrPut(r.ssid ?: "wifi-unknown") {
                 "Wi-Fi " + ('A' + alias.size)
             }

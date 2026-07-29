@@ -1,10 +1,10 @@
-package com.rountineai.collect
+package com.routineai.collect
 
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import com.rountineai.data.Db
-import com.rountineai.data.NotifEventRow
+import com.routineai.data.Db
+import com.routineai.data.NotifEventRow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

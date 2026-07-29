@@ -1,4 +1,4 @@
-package com.rountineai.interpret
+package com.routineai.interpret
 
 import android.content.Context
 import kotlinx.serialization.json.Json
@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
  * 새로 나타난 패턴은 못 잡기 때문이다. 대신 해석 지침서를 시스템 프롬프트로 주고
  * 계산된 수치만 넘긴다.
  *
- * 보내는 것: [com.rountineai.analysis.Report] 의 **집계 수치뿐**.
+ * 보내는 것: [com.routineai.analysis.Report] 의 **집계 수치뿐**.
  * 보내지 않는 것: 원본 이벤트, 알림 본문, Wi-Fi 실제 이름(별칭으로 치환됨).
  */
 class Interpreter(private val ctx: Context) {
@@ -41,7 +41,7 @@ class Interpreter(private val ctx: Context) {
     }
 
     /**
-     * @param reportJson [com.rountineai.analysis.Report] 를 직렬화한 문자열
+     * @param reportJson [com.routineai.analysis.Report] 를 직렬화한 문자열
      * @return 마크다운 해석문
      */
     fun interpret(

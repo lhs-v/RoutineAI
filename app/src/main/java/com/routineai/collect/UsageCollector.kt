@@ -1,11 +1,11 @@
-package com.rountineai.collect
+package com.routineai.collect
 
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import com.rountineai.data.Db
-import com.rountineai.data.KvRow
-import com.rountineai.data.UsageEventRow
+import com.routineai.data.Db
+import com.routineai.data.KvRow
+import com.routineai.data.UsageEventRow
 
 /**
  * 시스템의 사용 이벤트를 읽어 로컬 DB에 누적한다.

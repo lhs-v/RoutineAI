@@ -1,7 +1,7 @@
-package com.rountineai.analysis
+package com.routineai.analysis
 
 import android.app.usage.UsageEvents
-import com.rountineai.data.UsageEventRow
+import com.routineai.data.UsageEventRow
 
 /**
  * 원본 이벤트를 화면 세션으로 조립한다.

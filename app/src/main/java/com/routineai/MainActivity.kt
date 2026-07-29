@@ -1,4 +1,4 @@
-package com.rountineai
+package com.routineai
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -39,13 +39,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
-import com.rountineai.analysis.Analyzer
-import com.rountineai.analysis.Report
-import com.rountineai.collect.NetworkCollector
-import com.rountineai.collect.Permissions
-import com.rountineai.collect.UsageCollector
-import com.rountineai.interpret.Interpreter
-import com.rountineai.interpret.Settings
+import com.routineai.analysis.Analyzer
+import com.routineai.analysis.Report
+import com.routineai.collect.NetworkCollector
+import com.routineai.collect.Permissions
+import com.routineai.collect.UsageCollector
+import com.routineai.interpret.Interpreter
+import com.routineai.interpret.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("RountineAI", style = MaterialTheme.typography.headlineSmall)
+            Text("RoutineAI", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "시스템은 사용 이벤트를 며칠치만 보관합니다. 이 앱은 주기적으로 읽어 자체 DB에 " +
                     "누적하므로, 오래 쓸수록 분석 가능한 기간이 길어집니다.",

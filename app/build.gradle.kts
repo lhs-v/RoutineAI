@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.rountineai"
+    namespace = "com.routineai"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.rountineai"
+        applicationId = "com.routineai"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

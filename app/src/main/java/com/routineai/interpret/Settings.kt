@@ -1,4 +1,4 @@
-package com.rountineai.interpret
+package com.routineai.interpret
 
 import android.content.Context
 
@@ -9,7 +9,7 @@ import android.content.Context
  * 배포용으로 만들 거라면 EncryptedSharedPreferences 나 Keystore 로 바꿔야 한다.
  */
 class Settings(ctx: Context) {
-    private val sp = ctx.getSharedPreferences("rountine", Context.MODE_PRIVATE)
+    private val sp = ctx.getSharedPreferences("routine", Context.MODE_PRIVATE)
 
     var apiKey: String
         get() = sp.getString("api_key", "").orEmpty()

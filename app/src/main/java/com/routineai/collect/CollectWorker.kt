@@ -1,4 +1,4 @@
-package com.rountineai.collect
+package com.routineai.collect
 
 import android.content.Context
 import android.util.Log
@@ -41,7 +41,7 @@ class CollectWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 
     companion object {
         private const val TAG = "CollectWorker"
-        private const val NAME = "rountine-collect"
+        private const val NAME = "routine-collect"
 
         fun schedule(ctx: Context) {
             val req = PeriodicWorkRequestBuilder<CollectWorker>(6, TimeUnit.HOURS)

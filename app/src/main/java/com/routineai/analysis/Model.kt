@@ -1,4 +1,4 @@
-package com.rountineai.analysis
+package com.routineai.analysis
 
 import kotlinx.serialization.Serializable
 
@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
  * 대시보드가 소비하는 리포트. 이 객체가 그대로 JSON 이 되어 WebView 로 넘어간다.
  *
  * 원칙: 여기에는 **계산된 값만** 담는다. 해석 문장은 들어가지 않는다.
- * 해석은 [com.rountineai.interpret.Interpreter] 가 이 JSON 을 보고 따로 만든다.
+ * 해석은 [com.routineai.interpret.Interpreter] 가 이 JSON 을 보고 따로 만든다.
  */
 @Serializable
 data class Report(

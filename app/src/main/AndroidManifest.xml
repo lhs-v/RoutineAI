@@ -20,12 +20,12 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
-        android:name=".RountineApp"
+        android:name=".RoutineApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.RountineAI">
+        android:theme="@style/Theme.RoutineAI">
 
         <activity
             android:name=".MainActivity"
