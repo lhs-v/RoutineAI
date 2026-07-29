@@ -48,6 +48,8 @@ data class Diagnostics(
     /** "screen_events" = 화면 이벤트로 세션 구성, "activity_gap" = 앱 전환 간격으로 대체 */
     val sessionSource: String,
     val storedNotifs: Int,
+    /** 이 기기가 usagestats 로 NOTIFICATION_INTERRUPTION 을 내주는가 (0 이면 안 줌) */
+    val systemInterruptEvents: Int,
     val netChangeRecords: Int,
     val usageAccessGranted: Boolean,
 )
@@ -77,8 +79,15 @@ data class DayStat(
     val noAppWakes: Int,
     /** 지속 알림(ONGOING)을 뺀 전체 알림 */
     val notifs: Int,
-    /** 그중 소리·헤드업으로 실제 주의를 끈 것 */
+    /** 그중 채널 중요도가 기본 이상인 것 (소리·헤드업이 날 수 있는 알림) */
     val notifsInterruptive: Int,
+    /**
+     * 시스템이 '실제로 방해했다'고 기록한 알림.
+     * usagestats 의 NOTIFICATION_INTERRUPTION(type 12) 개수이며,
+     * 소리·진동·헤드업이 실제로 발생했을 때만 남는다.
+     * 기기가 이 이벤트를 앱에 주지 않으면 0 이다.
+     */
+    val notifsSystemInterrupt: Int,
 )
 
 @Serializable

@@ -79,6 +79,10 @@ class Analyzer(private val ctx: Context) {
         val liveNotifs = notifs.filter { !it.ongoing }
         val notifByDate = liveNotifs.groupBy { it.ts.toLocalDate() }
         val notifIntByDate = liveNotifs.filter { it.interruptive }.groupBy { it.ts.toLocalDate() }
+        // 시스템이 직접 남긴 방해 기록. 웹 보고서가 쓴 것과 같은 정의다.
+        // 기기가 이 이벤트를 서드파티 앱에 주는지는 기기마다 달라서 진단에도 싣는다.
+        val sysInterruptByDate = raw.filter { it.type == EVENT_NOTIFICATION_INTERRUPTION }
+            .groupBy { it.ts.toLocalDate() }
         val dayStats = allDates.map { d ->
             val ss = sessByDate[d].orEmpty()
             DayStat(
@@ -92,6 +96,7 @@ class Analyzer(private val ctx: Context) {
                 noAppWakes = ss.count { it.durationMs < 30_000 && it.apps(launcher).isEmpty() },
                 notifs = notifByDate[d].orEmpty().size,
                 notifsInterruptive = notifIntByDate[d].orEmpty().size,
+                notifsSystemInterrupt = sysInterruptByDate[d].orEmpty().size,
             )
         }
         val fullStats = dayStats.filter { it.full }
@@ -242,6 +247,10 @@ class Analyzer(private val ctx: Context) {
         if (!Permissions.hasNotificationAccess(ctx)) {
             warnings += "알림 접근이 꺼져 있어 알림 통계가 비어 있습니다."
         }
+        if (notifs.isEmpty() && raw.any { it.type == EVENT_NOTIFICATION_INTERRUPTION }) {
+            warnings += "알림 리스너 기록은 없지만 시스템 방해 기록은 있습니다. " +
+                "알림 접근을 켜기 전 구간이라 그렇습니다."
+        }
         if (netBuckets.isEmpty()) {
             warnings += "통신량 기록이 없어 외출 지표를 만들 수 없습니다. " +
                 "수집을 한 번 더 실행하거나 READ_PHONE_STATE 권한을 확인하세요."
@@ -310,6 +319,7 @@ class Analyzer(private val ctx: Context) {
                 sessionsBuilt = sessions.size,
                 sessionSource = s.source,
                 storedNotifs = notifs.size,
+                systemInterruptEvents = raw.count { it.type == EVENT_NOTIFICATION_INTERRUPTION },
                 netChangeRecords = netChanges.size,
                 usageAccessGranted = Permissions.hasUsageAccess(ctx),
             ),
@@ -505,6 +515,9 @@ class Analyzer(private val ctx: Context) {
         else -> "기타 (type=${'$'}t)"
     }
 }
+
+/** usagestats NOTIFICATION_INTERRUPTION. 공개 상수가 아니라 값으로 둔다. */
+private const val EVENT_NOTIFICATION_INTERRUPTION = 12
 
 private const val BUCKET_MS = 2L * 60 * 60 * 1000
 private val WEEKDAY_ORDER = listOf("월", "화", "수", "목", "금", "토", "일")
