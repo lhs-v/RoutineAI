@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -122,7 +123,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(16.dp, 14.dp, 16.dp, 8.dp),
                 )
                 TabRow(selectedTabIndex = tab) {
-                    listOf("권한", "수집", "리포트").forEachIndexed { i, t ->
+                    listOf("권한", "수집", "대시보드", "해석").forEachIndexed { i, t ->
                         Tab(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -176,9 +177,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onGoPerm = { tab = 0 })
 
-                        else -> ReportTab(
+                        2 -> DashboardTab(
                             busy = busy, msg = reportMsg, reportJson = reportJson,
-                            interpretation = interpretation, prefs = prefs,
                             onBuild = {
                                 busy = true; step = "시작하는 중"
                                 lifecycleScope.launch {
@@ -199,6 +199,11 @@ class MainActivity : ComponentActivity() {
                                     busy = false; step = ""
                                 }
                             },
+                        )
+
+                        else -> InterpretTab(
+                            busy = busy, hasReport = reportJson != null,
+                            interpretation = interpretation, prefs = prefs,
                             onInterpret = { key ->
                                 busy = true; step = "해석 요청 중 (최대 2분)"
                                 lifecycleScope.launch {
@@ -352,56 +357,119 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 대시보드 탭.
+     *
+     * WebView 를 verticalScroll 안에 넣으면 안 된다. 바깥 스크롤이 드래그를 먼저
+     * 먹어버려서 WebView 내부가 움직이지 않고, 첫 화면 아래로는 볼 수가 없다.
+     * 그래서 컨트롤은 위에 고정하고 WebView 가 남은 높이를 전부 차지하게 둔다.
+     */
     @Composable
-    private fun ReportTab(
-        busy: Boolean, msg: String, reportJson: String?, interpretation: String,
-        prefs: Settings, onBuild: () -> Unit, onInterpret: (String) -> Unit,
+    private fun DashboardTab(
+        busy: Boolean, msg: String, reportJson: String?, onBuild: () -> Unit,
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.padding(16.dp, 12.dp, 16.dp, 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(enabled = !busy, onClick = onBuild) { Text("리포트 생성") }
+                if (msg.isNotBlank()) {
+                    Text(msg, style = MaterialTheme.typography.bodySmall)
+                }
+                if (reportJson == null && !busy) {
+                    Text(
+                        "리포트를 만들면 여기에 대시보드가 나타납니다. 아래 영역은 좌우·상하로 스크롤됩니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            HorizontalDivider()
+            DashboardWebView(
+                reportJson = reportJson,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
+    }
+
+    /**
+     * 페이지 로드가 끝난 뒤에 렌더한다.
+     *
+     * 이전 버전은 factory 직후 update 에서 바로 호출해서, 첫 번째 누름은 아직
+     * 페이지가 안 떠 있어 조용히 실패했다. 그래서 두 번 눌러야 보였다.
+     */
+    @Composable
+    private fun DashboardWebView(reportJson: String?, modifier: Modifier) {
+        val holder = remember { WebHolder() }
+        AndroidView(
+            modifier = modifier,
+            factory = { c ->
+                WebView(c).apply {
+                    this.settings.javaScriptEnabled = true
+                    this.settings.domStorageEnabled = false
+                    this.settings.builtInZoomControls = true
+                    this.settings.displayZoomControls = false
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView, url: String) {
+                            holder.loaded = true
+                            holder.json?.let { render(view, it) }
+                        }
+                    }
+                    holder.web = this
+                    loadUrl("file:///android_asset/dashboard.html")
+                }
+            },
+            update = { wv ->
+                holder.json = reportJson
+                if (holder.loaded && reportJson != null) render(wv, reportJson)
+            },
+        )
+    }
+
+    private class WebHolder {
+        var web: WebView? = null
+        var loaded = false
+        var json: String? = null
+    }
+
+    private fun render(wv: WebView, json: String) {
+        wv.evaluateJavascript("window.renderReport($json);", null)
+    }
+
+    @Composable
+    private fun InterpretTab(
+        busy: Boolean, hasReport: Boolean, interpretation: String,
+        prefs: Settings, onInterpret: (String) -> Unit,
     ) {
         var apiKey by remember { mutableStateOf(prefs.apiKey) }
         Column(
             Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Button(enabled = !busy, onClick = onBuild) { Text("리포트 생성") }
-            if (msg.isNotBlank()) {
-                Card(Modifier.fillMaxWidth()) {
-                    Text(msg, style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp))
+            Text(
+                "집계 수치만 전송합니다. 원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (!hasReport) {
+                Card(colors = CardDefaults.cardColors(containerColor = WARN.copy(alpha = .12f))) {
+                    Text(
+                        "먼저 대시보드 탭에서 리포트를 생성해 주세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp),
+                    )
                 }
             }
-
-            if (reportJson != null) {
-                AndroidView(
-                    modifier = Modifier.fillMaxWidth().height(780.dp),
-                    factory = { c ->
-                        WebView(c).apply {
-                            this.settings.javaScriptEnabled = true
-                            this.settings.domStorageEnabled = false
-                            loadUrl("file:///android_asset/dashboard.html")
-                        }
-                    },
-                    update = { wv ->
-                        wv.evaluateJavascript("window.renderReport($reportJson);", null)
-                    },
-                )
-
-                HorizontalDivider()
-                Text("해석 (선택)", fontWeight = FontWeight.SemiBold)
-                Text(
-                    "집계 수치만 전송합니다. 원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it; prefs.apiKey = it },
-                    label = { Text("Anthropic API 키") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(enabled = apiKey.isNotBlank() && !busy, onClick = { onInterpret(apiKey) }) {
-                    Text("해석 요청")
-                }
-            }
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it; prefs.apiKey = it },
+                label = { Text("Anthropic API 키") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                enabled = hasReport && apiKey.isNotBlank() && !busy,
+                onClick = { onInterpret(apiKey) },
+            ) { Text("해석 요청") }
 
             if (interpretation.isNotBlank()) {
                 HorizontalDivider()

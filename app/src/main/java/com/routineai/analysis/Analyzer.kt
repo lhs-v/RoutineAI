@@ -76,7 +76,9 @@ class Analyzer(private val ctx: Context) {
 
         // ---- 일별 지표 ----
         val sessByDate = sessions.groupBy { it.start.toLocalDate() }
-        val notifByDate = notifs.filter { it.interruptive }.groupBy { it.ts.toLocalDate() }
+        val liveNotifs = notifs.filter { !it.ongoing }
+        val notifByDate = liveNotifs.groupBy { it.ts.toLocalDate() }
+        val notifIntByDate = liveNotifs.filter { it.interruptive }.groupBy { it.ts.toLocalDate() }
         val dayStats = allDates.map { d ->
             val ss = sessByDate[d].orEmpty()
             DayStat(
@@ -89,6 +91,7 @@ class Analyzer(private val ctx: Context) {
                 microWakes = ss.count { it.durationMs < 30_000 },
                 noAppWakes = ss.count { it.durationMs < 30_000 && it.apps(launcher).isEmpty() },
                 notifs = notifByDate[d].orEmpty().size,
+                notifsInterruptive = notifIntByDate[d].orEmpty().size,
             )
         }
         val fullStats = dayStats.filter { it.full }
@@ -109,7 +112,7 @@ class Analyzer(private val ctx: Context) {
             }
         }
         val notifPerHour = DoubleArray(24)
-        notifs.filter { it.interruptive && it.ts.toLocalDate() in fullDates }
+        liveNotifs.filter { it.ts.toLocalDate() in fullDates }
             .forEach { notifPerHour[it.ts.toLocalDateTime().hour] += 1 }
         val hourly = (0..23).map {
             HourStat(it, screenPerHour[it] / nFull, notifPerHour[it] / nFull)
@@ -203,7 +206,7 @@ class Analyzer(private val ctx: Context) {
         val timeFixed = timeFixed(raw, fullDates, launcher, system, apps)
 
         // ---- 알림 ----
-        val notifByApp = notifs.filter { it.interruptive && it.ts.toLocalDate() in fullDates }
+        val notifByApp = liveNotifs.filter { it.ts.toLocalDate() in fullDates }
             .groupingBy { it.pkg }.eachCount().entries
             .sortedByDescending { it.value }.take(10)
             .map { CountStat(label(it.key), (it.value.toDouble() / nFull).r2()) }

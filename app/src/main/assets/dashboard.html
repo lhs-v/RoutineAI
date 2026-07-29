@@ -45,6 +45,8 @@ table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:ta
 .scroll table{min-width:430px;white-space:nowrap}
 table.kv td{white-space:normal;word-break:break-word;vertical-align:top}
 table.kv td:first-child{width:56%;color:var(--text-secondary)}
+table.kv thead th{text-align:right}
+table.kv thead th:first-child{text-align:left}
 th,td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--grid)}
 th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
 th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase}
@@ -160,14 +162,32 @@ window.renderReport=function(D){
      n:`평일 ${q.weekdayCount}일 · 주말 ${q.weekendCount}일`},
     {v:Math.round(avg(d=>d.wakes))+"회",l:"하루 화면 켠 횟수",
      n:`30초 미만 ${Math.round(avg(d=>d.microWakes))}회 · 앱 미실행 ${Math.round(avg(d=>d.noAppWakes))}회`},
-    {v:Math.round(avg(d=>d.notifs))+"건",l:"하루 방해성 알림",
-     n:q.notifAccessGranted?"알림 접근 허용됨":"알림 접근 꺼짐 — 값 없음"},
+    {v:Math.round(avg(d=>d.notifs))+"건",l:"하루 받은 알림",
+     n:q.notifAccessGranted
+        ? `그중 소리·헤드업 ${Math.round(avg(d=>d.notifsInterruptive||0))}건 · 지속 알림 제외`
+        : "알림 접근이 꺼져 있어 값이 비어 있습니다"},
     {v:D.sleep.length?r1(median(D.sleep.map(s=>s.hours)))+"시간":"—",l:"폰을 놓은 구간 (중앙값)",
      n:`관측 ${D.sleep.length}일`},
   ];
   add(`<div class="grid g2">${hero.map(i=>`<div class="card stat">
     <div class="v">${i.v}</div><div class="l">${i.l}</div><div class="n">${i.n}</div>
   </div>`).join("")}</div>`);
+
+  /* 평일 / 주말 */
+  const wk=full.filter(d=>!d.isWeekend), we=full.filter(d=>d.isWeekend);
+  if(wk.length>=2&&we.length>=1){
+    const m=(a,f)=>a.length?a.reduce((x,y)=>x+f(y),0)/a.length:0;
+    const rows=[["화면 사용",r1(m(wk,d=>d.screenMinutes)/60)+"시간",r1(m(we,d=>d.screenMinutes)/60)+"시간"],
+      ["화면 켠 횟수",Math.round(m(wk,d=>d.wakes))+"회",Math.round(m(we,d=>d.wakes))+"회"],
+      ["30초 미만",Math.round(m(wk,d=>d.microWakes))+"회",Math.round(m(we,d=>d.microWakes))+"회"],
+      ["받은 알림",Math.round(m(wk,d=>d.notifs))+"건",Math.round(m(we,d=>d.notifs))+"건"]];
+    add(`<h2>평일 vs 주말</h2><div class="card">
+      <table class="kv"><thead><tr><th>항목</th><th>평일 ${wk.length}일</th>
+      <th>주말 ${we.length}일</th></tr></thead><tbody>`+
+      rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("")+
+      `</tbody></table>${we.length<3?
+        '<p class="empty">주말 표본이 '+we.length+'일뿐이라 참고용입니다.</p>':''}</div>`);
+  }
 
   /* 날짜별 */
   add(`<h2>날짜별 추이</h2><div class="card"><figure>

@@ -73,7 +73,10 @@ data class DayStat(
     val wakes: Int,
     val microWakes: Int,
     val noAppWakes: Int,
+    /** 지속 알림(ONGOING)을 뺀 전체 알림 */
     val notifs: Int,
+    /** 그중 소리·헤드업으로 실제 주의를 끈 것 */
+    val notifsInterruptive: Int,
 )
 
 @Serializable
