@@ -45,7 +45,13 @@ object Sessionizer {
         val duplicatesDropped: Int,
         val shortWakesDropped: Int,
         val coUseEventsExcluded: Int,
+        /** "screen_events" 또는 "activity_gap" */
+        val source: String,
+        val screenEventCount: Int,
     )
+
+    /** 앱 전환이 이만큼 끊기면 다른 세션으로 본다 (화면 이벤트가 없을 때만 사용) */
+    private const val GAP_SPLIT_MS = 5L * 60 * 1000
 
     fun build(
         raw: List<UsageEventRow>,
@@ -137,6 +143,23 @@ object Sessionizer {
             sessions.add(Session(s, last, spans))
         }
 
+        val screenCount = events.count { it.type == SCREEN_ON || it.type == SCREEN_OFF }
+
+        // 화면 이벤트를 안 주는 기기가 있다. 그러면 세션이 하나도 안 만들어지고
+        // 모든 통계가 0 이 된다. 이 경우 앱 전환 간격으로 세션을 대신 만든다.
+        if (sessions.isEmpty() && screenCount == 0) {
+            val fallback = buildFromActivityGaps(events, launcherPkg, systemPkgs, coUseSeconds)
+            return Result(
+                sessions = fallback.filter { it.durationMs >= MIN_WAKE_MS },
+                coUse = coUse,
+                duplicatesDropped = dupes,
+                shortWakesDropped = fallback.count { it.durationMs < MIN_WAKE_MS },
+                coUseEventsExcluded = coUseExcluded,
+                source = "activity_gap",
+                screenEventCount = 0,
+            )
+        }
+
         val short = sessions.count { it.durationMs < MIN_WAKE_MS }
         return Result(
             sessions = sessions.filter { it.durationMs >= MIN_WAKE_MS },
@@ -144,6 +167,56 @@ object Sessionizer {
             duplicatesDropped = dupes,
             shortWakesDropped = short,
             coUseEventsExcluded = coUseExcluded,
+            source = "screen_events",
+            screenEventCount = screenCount,
         )
+    }
+
+    /**
+     * 화면 이벤트가 없을 때의 대체 경로.
+     *
+     * 앱이 포그라운드에 올라온 시각들을 5분 간격으로 끊어 세션으로 본다.
+     * 화면 켜짐 기준이 아니므로 '화면을 켰지만 앱을 안 연' 경우는 잡히지 않는다.
+     * 이 차이는 [Result.source] 로 알리고 리포트에도 표시한다.
+     */
+    private fun buildFromActivityGaps(
+        events: List<UsageEventRow>,
+        launcherPkg: String,
+        systemPkgs: Set<String>,
+        coUseSeconds: Set<Long>,
+    ): List<Session> {
+        val opens = events.filter {
+            it.type == RESUMED && it.pkg !in systemPkgs && it.ts / 1000 !in coUseSeconds
+        }
+        if (opens.isEmpty()) return emptyList()
+
+        val out = ArrayList<Session>()
+        var spans = ArrayList<AppSpan>()
+        var start = opens.first().ts
+        var prev: UsageEventRow? = null
+        var pendingLauncher = false
+
+        fun flush(end: Long) {
+            if (spans.isNotEmpty() || end > start) out.add(Session(start, end, spans))
+            spans = ArrayList()
+        }
+
+        for (e in opens) {
+            val p = prev
+            if (p != null && e.ts - p.ts > GAP_SPLIT_MS) {
+                // 마지막 앱은 다음 이벤트까지가 아니라 상한까지만 인정한다.
+                flush(minOf(p.ts + MAX_FOREGROUND_MS, p.ts + GAP_SPLIT_MS))
+                start = e.ts
+                pendingLauncher = false
+            } else if (p != null && p.pkg != launcherPkg) {
+                spans.add(AppSpan(p.pkg, p.ts, e.ts, pendingLauncher))
+                pendingLauncher = false
+            } else if (p != null) {
+                pendingLauncher = true
+            }
+            prev = e
+        }
+        prev?.let { flush(it.ts + 60_000) }
+        return out
     }
 }

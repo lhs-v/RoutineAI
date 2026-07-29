@@ -43,6 +43,8 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .scroll table{min-width:430px;white-space:nowrap}
+table.kv td{white-space:normal;word-break:break-word;vertical-align:top}
+table.kv td:first-child{width:56%;color:var(--text-secondary)}
 th,td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--grid)}
 th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
 th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase}
@@ -122,6 +124,24 @@ window.renderReport=function(D){
     "부분일 "+m.partialDays.length+"일",
     "이벤트 "+m.eventCount.toLocaleString()+"건",
   ].map(t=>`<span class="chip">${t}</span>`).join("")}</div>`);
+
+  /* 데이터가 없으면 원인부터 보여준다 */
+  const dg=D.diagnostics||{};
+  if(!dg.storedEvents){
+    add(`<div class="warn"><b>저장된 이벤트가 0건입니다</b> — 아직 아무것도 수집되지 않았습니다.
+      ${dg.usageAccessGranted===false
+        ? "'사용 정보 접근' 권한이 꺼져 있습니다. 권한 탭에서 켜고 다시 수집하세요."
+        : "권한은 켜져 있습니다. 수집 탭에서 '지금 수집'을 눌러주세요."}</div>`);
+    diagBlock(add,dg,q);
+    return;
+  }
+  if(!dg.sessionsBuilt){
+    add(`<div class="warn"><b>이벤트는 ${dg.storedEvents.toLocaleString()}건인데 세션이 0개입니다</b> —
+      화면 켜짐/꺼짐 이벤트가 없어 사용 구간을 만들지 못했습니다.
+      아래 이벤트 종류 분포를 확인해 주세요.</div>`);
+    diagBlock(add,dg,q);
+    return;
+  }
 
   /* 품질 경고 — 맨 앞에 둔다 */
   if(q.warnings.length||q.reconciliationDelta<0){
@@ -249,7 +269,39 @@ window.renderReport=function(D){
   </tbody></table></div>
   <p class="empty">차이는 잠금화면·알림창처럼 앱 전환이 없던 구간입니다. 음수면 집계 오류입니다.</p>
   </div>`);
+
+  diagBlock(add,dg,q);
 };
+
+/* ---------- 진단 ---------- */
+function diagBlock(add,dg,q){
+  if(!dg||!Object.keys(dg).length)return;
+  const t=ts=>ts?new Date(ts).toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit"}):"—";
+  const src=dg.sessionSource==="activity_gap"
+    ? '앱 전환 간격 <span style="color:var(--s4)">(화면 이벤트 없음)</span>'
+    : "화면 켜짐/꺼짐 이벤트";
+  let rows=`
+    <tr><td>사용 정보 접근 권한</td><td>${dg.usageAccessGranted?"허용됨":
+      '<span style="color:var(--crit)">꺼짐</span>'}</td></tr>
+    <tr><td>DB에 쌓인 이벤트</td><td>${(dg.storedEvents||0).toLocaleString()}건</td></tr>
+    <tr><td>기록 구간</td><td>${t(dg.oldestEventTs)} ~ ${t(dg.newestEventTs)}</td></tr>
+    <tr><td>마지막 수집</td><td>${t(dg.lastCollectTs)}</td></tr>
+    <tr><td>세션 구성 방식</td><td>${src}</td></tr>
+    <tr><td>만들어진 세션</td><td>${dg.sessionsBuilt||0}개</td></tr>
+    <tr><td>화면 이벤트 / 앱 시작 이벤트</td>
+        <td>${dg.screenEvents||0}건 / ${(dg.activityResumedEvents||0).toLocaleString()}건</td></tr>
+    <tr><td>알림 기록 / 네트워크 변경 기록</td>
+        <td>${dg.storedNotifs||0}건 / ${dg.netChangeRecords||0}건</td></tr>`;
+  add(`<h2>진단</h2><div class="card"><table class="kv"><tbody>${rows}
+    </tbody></table>
+    <p class="empty" style="margin-top:10px">이 기기가 실제로 내주는 이벤트 종류</p>
+    <table class="kv"><tbody>${
+      Object.entries(dg.eventTypeCounts||{}).map(([k,v])=>
+        `<tr><td>${k}</td><td>${v.toLocaleString()}건</td></tr>`).join("")||
+        '<tr><td colspan="2">없음</td></tr>'
+    }</tbody></table></div>`);
+}
 
 function median(a){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;
   return s.length%2?s[m]:(s[m-1]+s[m])/2;}

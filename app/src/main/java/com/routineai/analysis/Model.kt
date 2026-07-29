@@ -23,6 +23,31 @@ data class Report(
     val places: List<PlaceStat>,
     val timeFixed: List<TimeFixedStat>,
     val quality: Quality,
+    val diagnostics: Diagnostics,
+)
+
+/**
+ * "왜 값이 비었는가"에 답하기 위한 진단 정보.
+ *
+ * 대시보드가 0으로 나올 때 원인이 권한인지, 수집인지, 집계인지 구분할 수 있어야 한다.
+ * 기기마다 어떤 이벤트 종류를 실제로 내주는지도 다르므로 그 분포를 그대로 싣는다.
+ */
+@Serializable
+data class Diagnostics(
+    val storedEvents: Int,
+    val oldestEventTs: Long?,
+    val newestEventTs: Long?,
+    val lastCollectTs: Long?,
+    /** 이벤트 종류별 개수. 기기가 무엇을 주는지 확인하는 용도 */
+    val eventTypeCounts: Map<String, Int>,
+    val screenEvents: Int,
+    val activityResumedEvents: Int,
+    val sessionsBuilt: Int,
+    /** "screen_events" = 화면 이벤트로 세션 구성, "activity_gap" = 앱 전환 간격으로 대체 */
+    val sessionSource: String,
+    val storedNotifs: Int,
+    val netChangeRecords: Int,
+    val usageAccessGranted: Boolean,
 )
 
 @Serializable
@@ -137,5 +162,7 @@ data class Quality(
     val weekendCount: Int,
     val notifAccessGranted: Boolean,
     val locationGranted: Boolean,
+    /** 관측 창이 하루를 온전히 덮은 날이 없어 전체 날짜를 그대로 쓴 경우 true */
+    val fullDayFallback: Boolean,
     val warnings: List<String>,
 )

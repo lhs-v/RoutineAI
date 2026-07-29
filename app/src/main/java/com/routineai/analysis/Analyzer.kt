@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.Intent
 import com.routineai.collect.NetworkCollector
+import com.routineai.collect.UsageCollector
 import com.routineai.collect.Permissions
 import com.routineai.data.Db
 import com.routineai.data.NotifEventRow
@@ -33,7 +34,11 @@ class Analyzer(private val ctx: Context) {
     private val dao = Db.get(ctx).dao()
     private val pm = ctx.packageManager
 
-    suspend fun build(days: Int = 30): Report {
+    /**
+     * @param onStep 진행 상황 콜백. UI 에서 어느 단계인지 보여주기 위한 것.
+     */
+    suspend fun build(days: Int = 30, onStep: (String) -> Unit = {}): Report {
+        onStep("저장된 이벤트 읽는 중")
         val now = System.currentTimeMillis()
         val from = now - days.toLong() * 24 * 60 * 60 * 1000
 
@@ -48,16 +53,26 @@ class Analyzer(private val ctx: Context) {
         val sessions = s.sessions
 
         // ---- 날짜별 커버리지: 부분일 판정 ----
+        //
+        // 판정 기준은 "사용자가 그 시간에 폰을 봤는가"가 아니라
+        // "관측 창이 그 날 00:00~24:00 을 덮는가"다.
+        // 전자로 판정하면 아침 늦게 일어난 날이 전부 부분일이 되어
+        // 평균 계산 대상이 사라지고 모든 지표가 0 이 된다.
         val byDate = raw.groupBy { it.ts.toLocalDate() }
         val allDates = byDate.keys.sorted()
-        val fullDates = allDates.filter { d ->
-            val ts = byDate.getValue(d)
-            val first = ts.minOf { it.ts }.toLocalDateTime()
-            val last = ts.maxOf { it.ts }.toLocalDateTime()
-            // 하루의 양 끝을 충분히 덮어야 온전한 날로 본다.
-            first.hour <= 2 && last.hour >= 21
+        val windowStart = raw.minOfOrNull { it.ts } ?: now
+        val windowEnd = raw.maxOfOrNull { it.ts } ?: now
+        var fullDates = allDates.filter { d ->
+            val dayStart = d.atStartOfDay(zone).toInstant().toEpochMilli()
+            val dayEnd = d.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            windowStart <= dayStart && windowEnd >= dayEnd
         }
+        // 수집한 지 하루가 안 됐으면 온전한 날이 하나도 없다.
+        // 그래도 빈 리포트를 내놓는 것보다는 가진 날로 계산하고 그 사실을 알리는 편이 낫다.
+        val fullDayFallback = fullDates.isEmpty() && allDates.isNotEmpty()
+        if (fullDayFallback) fullDates = allDates
         val partial = allDates - fullDates.toSet()
+        onStep("세션 조립 중")
 
         // ---- 일별 지표 ----
         val sessByDate = sessions.groupBy { it.start.toLocalDate() }
@@ -100,6 +115,8 @@ class Analyzer(private val ctx: Context) {
             HourStat(it, screenPerHour[it] / nFull, notifPerHour[it] / nFull)
         }
 
+        onStep("앱별 사용 시간 계산 중")
+
         // ---- 앱별 지표 ----
         val perDayPerApp = HashMap<String, HashMap<LocalDate, Double>>()
         for (s0 in sessions) for (sp in s0.spans) {
@@ -130,6 +147,8 @@ class Analyzer(private val ctx: Context) {
                 secondsPerLaunch = if (launches > 0) (vals.sum() * 60 / launches / nFull).r2() else 0.0,
             )
         }.sortedByDescending { it.meanMinutes }
+
+        onStep("앱 전환 분석 중")
 
         // ---- 앱 전환 (홈·동시실행 제외) ----
         val trans = HashMap<Pair<String, String>, MutableList<Long>>()
@@ -175,6 +194,8 @@ class Analyzer(private val ctx: Context) {
             CountStat(if (it.key >= 5) "5개 이상" else "${it.key}개", it.value.toDouble())
         }
 
+        onStep("수면 구간 추정 중")
+
         // ---- 수면 추정 ----
         val sleep = estimateSleep(sessions)
 
@@ -189,6 +210,8 @@ class Analyzer(private val ctx: Context) {
 
         // ---- 장소 ----
         val places = places(netChanges, now)
+
+        onStep("검산 중")
 
         // ---- 검산 ----
         val screenFromSessions = fullStats.sumOf { it.screenMinutes } / nFull
@@ -206,6 +229,21 @@ class Analyzer(private val ctx: Context) {
         }
         if (netChanges.isEmpty()) {
             warnings += "네트워크 변경 기록이 없습니다. 장소 축을 만들 수 없습니다."
+        }
+        if (raw.isEmpty()) {
+            warnings += "저장된 이벤트가 0건입니다. '사용 정보 접근' 권한을 켠 뒤 수집을 다시 실행하세요."
+        }
+        if (fullDayFallback) {
+            warnings += "아직 온전한 하루가 없습니다(수집 시작 후 24시간 미만). " +
+                "부분 기록된 날로 계산한 값이라 하루 평균이 실제보다 작습니다."
+        }
+        if (s.source == "activity_gap") {
+            warnings += "이 기기가 화면 켜짐/꺼짐 이벤트를 주지 않아, 앱 전환 간격으로 세션을 대신 만들었습니다. " +
+                "'앱을 열지 않고 화면만 켠' 경우는 집계되지 않습니다."
+        }
+        if (sessions.isEmpty() && raw.isNotEmpty()) {
+            warnings += "이벤트는 ${raw.size}건 있는데 세션이 하나도 만들어지지 않았습니다. " +
+                "진단의 이벤트 종류 분포를 확인해 주세요."
         }
 
         return Report(
@@ -235,7 +273,25 @@ class Analyzer(private val ctx: Context) {
                 locationGranted = ctx.checkSelfPermission(
                     android.Manifest.permission.ACCESS_FINE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED,
+                fullDayFallback = fullDayFallback,
                 warnings = warnings,
+            ),
+            diagnostics = Diagnostics(
+                storedEvents = dao.eventCount(),
+                oldestEventTs = dao.firstEventTs(),
+                newestEventTs = raw.maxOfOrNull { it.ts },
+                lastCollectTs = dao.get(UsageCollector.KEY_LAST_SYNC)?.toLongOrNull(),
+                eventTypeCounts = raw.groupingBy { eventTypeName(it.type) }.eachCount()
+                    .entries.sortedByDescending { it.value }.associate { it.key to it.value },
+                screenEvents = s.screenEventCount,
+                activityResumedEvents = raw.count {
+                    it.type == UsageEvents.Event.ACTIVITY_RESUMED
+                },
+                sessionsBuilt = sessions.size,
+                sessionSource = s.source,
+                storedNotifs = notifs.size,
+                netChangeRecords = netChanges.size,
+                usageAccessGranted = Permissions.hasUsageAccess(ctx),
             ),
         )
     }
@@ -375,6 +431,28 @@ class Analyzer(private val ctx: Context) {
         LocalDateTime.ofInstant(Instant.ofEpochMilli(this), zone)
 
     private fun Long.toLocalDate(): LocalDate = toLocalDateTime().toLocalDate()
+
+    /** 진단 화면에 보여줄 이벤트 종류 이름. 모르는 값은 번호 그대로 둔다. */
+    private fun eventTypeName(t: Int): String = when (t) {
+        1 -> "앱 시작 (ACTIVITY_RESUMED)"
+        2 -> "앱 일시정지 (ACTIVITY_PAUSED)"
+        23 -> "앱 정지 (ACTIVITY_STOPPED)"
+        5 -> "화면 구성 변경"
+        7 -> "사용자 조작"
+        8 -> "바로가기 실행"
+        11 -> "대기 버킷 변경"
+        12 -> "알림 방해"
+        10 -> "알림 확인"
+        15 -> "화면 켜짐 (SCREEN_INTERACTIVE)"
+        16 -> "화면 꺼짐 (SCREEN_NON_INTERACTIVE)"
+        17 -> "잠금 표시"
+        18 -> "잠금 해제"
+        19 -> "포그라운드 서비스 시작"
+        20 -> "포그라운드 서비스 종료"
+        26 -> "기기 종료"
+        27 -> "기기 시작"
+        else -> "기타 (type=${'$'}t)"
+    }
 }
 
 // ---- 작은 통계 헬퍼 ----
