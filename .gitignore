@@ -11,3 +11,8 @@ local.properties
 /app/release/
 *.apk
 *.keystore
+
+# 빌드 산출물 (하위 디렉터리 포함)
+build/
+.kotlin/
+*.hprof

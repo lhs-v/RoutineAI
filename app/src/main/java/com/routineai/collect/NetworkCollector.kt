@@ -36,6 +36,16 @@ class NetworkCollector(private val ctx: Context) {
      */
     suspend fun collectUsage(from: Long, to: Long) {
         val nsm = ctx.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
+
+        // (버킷 시작, uid, 전송수단) -> [rx, tx]
+        //
+        // 합산이 필요한 이유: queryDetails() 는 한 버킷을 uid 로만 나누지 않고
+        // foreground/background 상태와 tag 로도 쪼개 돌려준다. 그대로 행으로 만들면
+        // 같은 키가 여러 번 나오고, 유니크 인덱스가 뒤엣것을 버려 통신량이 실제보다
+        // 작아진다. 외출 지표는 모바일과 Wi-Fi 의 크기를 견주는 것이라
+        // 한쪽만 잘리면 판정이 뒤집힌다.
+        val merged = HashMap<Triple<Long, Int, Int>, LongArray>()
+
         listOf(
             ConnectivityManager.TYPE_WIFI to TRANSPORT_WIFI,
             ConnectivityManager.TYPE_MOBILE to TRANSPORT_MOBILE,
@@ -43,29 +53,48 @@ class NetworkCollector(private val ctx: Context) {
             try {
                 val stats = nsm.queryDetails(type, null, from, to)
                 val bucket = NetworkStats.Bucket()
-                val rows = ArrayList<NetBucketRow>()
+                var scanned = 0
                 while (stats.hasNextBucket()) {
                     stats.getNextBucket(bucket)
                     if (bucket.rxBytes == 0L && bucket.txBytes == 0L) continue
-                    if (rows.size > MAX_ROWS_PER_RUN) break
-                    rows.add(
-                        NetBucketRow(
-                            bucketStart = bucket.startTimeStamp,
-                            uid = bucket.uid,
-                            transport = transport,
-                            rxBytes = bucket.rxBytes,
-                            txBytes = bucket.txBytes,
-                        )
-                    )
+                    if (++scanned > MAX_BUCKETS_PER_RUN) break
+                    val acc = merged.getOrPut(
+                        Triple(bucket.startTimeStamp, bucket.uid, transport)
+                    ) { LongArray(2) }
+                    acc[0] += bucket.rxBytes
+                    acc[1] += bucket.txBytes
                 }
                 stats.close()
-                if (rows.isNotEmpty()) dao.insertNet(rows)
             } catch (t: Throwable) {
                 // 모바일 쪽은 기기·통신사에 따라 SecurityException 이 날 수 있다.
                 // 실패해도 Wi-Fi 통계와 나머지 분석은 그대로 굴러가야 한다.
                 Log.w(TAG, "netstats 조회 실패 type=$type", t)
             }
         }
+        if (merged.isEmpty()) return
+
+        // 이미 저장된 값과 큰 쪽을 남긴다.
+        //
+        // 진행 중인 버킷은 다음 수집 때 값이 커져 있으므로 덮어써야 최신이 된다.
+        // 반대로 조회 구간이 버킷을 반만 걸치면 시스템이 잘린 값을 줄 수 있는데,
+        // 그때 그냥 덮어쓰면 이미 온전히 받아둔 값이 줄어든다. 그래서 최댓값을 쓴다.
+        val minStart = merged.keys.minOf { it.first }
+        val maxStart = merged.keys.maxOf { it.first }
+        val stored = dao.net(minStart, maxStart + 1)
+            .associateBy { Triple(it.bucketStart, it.uid, it.transport) }
+
+        dao.upsertNet(
+            merged.map { (k, v) ->
+                val old = stored[k]
+                NetBucketRow(
+                    bucketStart = k.first,
+                    uid = k.second,
+                    transport = k.third,
+                    rxBytes = maxOf(v[0], old?.rxBytes ?: 0L),
+                    txBytes = maxOf(v[1], old?.txBytes ?: 0L),
+                )
+            }
+        )
     }
 
     /**
@@ -117,7 +146,7 @@ class NetworkCollector(private val ctx: Context) {
         /** 첫 실행 때 요청할 과거 범위 */
         private const val BACKFILL_MS = 180L * 24 * 60 * 60 * 1000
 
-        /** 한 번에 담을 최대 행 수 (오래된 기기에서 폭주 방지) */
-        private const val MAX_ROWS_PER_RUN = 200_000
+        /** 한 전송수단당 훑을 최대 버킷 수 (오래된 기기에서 폭주 방지) */
+        private const val MAX_BUCKETS_PER_RUN = 200_000
     }
 }

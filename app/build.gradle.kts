@@ -33,6 +33,10 @@ android {
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
+// Db 가 exportSchema = true 인데 이 경로가 없으면 스키마가 실제로는 안 나온다.
+// 엔티티를 바꿀 때 비교할 기준 스냅샷이 필요하므로 지정해 둔다.
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
