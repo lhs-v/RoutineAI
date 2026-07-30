@@ -28,10 +28,10 @@ import kotlin.math.sqrt
  *  - 평균과 함께 중앙값·편차·관측일수를 낸다.
  *  - 앱 시간 합계와 화면 시간을 서로 검산해 [Quality] 에 남긴다.
  */
-class Analyzer(private val ctx: Context) {
+class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
 
     private val zone: ZoneId = ZoneId.systemDefault()
-    private val dao = Db.get(ctx).dao()
+    private val dao = (if (demo) Db.demo(ctx) else Db.get(ctx)).dao()
     private val pm = ctx.packageManager
 
     /**
@@ -39,7 +39,11 @@ class Analyzer(private val ctx: Context) {
      */
     suspend fun build(days: Int = 30, onStep: (String) -> Unit = {}): Report {
         onStep("저장된 이벤트 읽는 중")
-        val now = System.currentTimeMillis()
+        // 데모 로그는 만든 시점이 고정되어 있다. 지금 시각을 기준으로 잡으면
+        // 며칠만 지나도 "최근 30일" 창 밖으로 빠져나가 전부 0 이 된다.
+        // 그래서 데모에서는 데이터 자체의 마지막 시각을 기준으로 삼는다.
+        val now = if (demo) dao.lastEventTs() ?: System.currentTimeMillis()
+        else System.currentTimeMillis()
         val from = now - days.toLong() * 24 * 60 * 60 * 1000
 
         val raw = dao.events(from, now)
@@ -251,7 +255,14 @@ class Analyzer(private val ctx: Context) {
             warnings += "주말 표본이 ${fullStats.count { it.isWeekend }}일뿐입니다. 주말 수치는 참고용입니다."
         }
         if (sleep.size < 5) warnings += "수면 추정 표본이 ${sleep.size}일뿐입니다."
-        if (!Permissions.hasNotificationAccess(ctx)) {
+        // 데모는 남의 기기에서 만든 고정 로그다. 이 기기의 권한 상태로 판단하면
+        // 엉뚱한 경고가 붙으므로, 대신 데모라는 사실 자체를 맨 앞에 알린다.
+        if (demo) {
+            warnings.add(
+                0,
+                "데모 데이터로 만든 리포트입니다. 이 기기의 실제 사용 기록이 아닙니다."
+            )
+        } else if (!Permissions.hasNotificationAccess(ctx)) {
             warnings += "알림 접근이 꺼져 있어 알림 통계가 비어 있습니다."
         }
         if (notifSinceDate != null && fullDates.any { it.isBefore(notifSinceDate) }) {
@@ -269,7 +280,7 @@ class Analyzer(private val ctx: Context) {
         if (netChanges.isEmpty()) {
             warnings += "네트워크 변경 기록이 없습니다. 장소 축을 만들 수 없습니다."
         }
-        if (raw.isEmpty()) {
+        if (raw.isEmpty() && !demo) {
             warnings += "저장된 이벤트가 0건입니다. '사용 정보 접근' 권한을 켠 뒤 수집을 다시 실행하세요."
         }
         if (fullDayFallback) {
@@ -309,8 +320,11 @@ class Analyzer(private val ctx: Context) {
                 shortWakesDropped = s.shortWakesDropped,
                 weekdayCount = fullStats.count { !it.isWeekend },
                 weekendCount = fullStats.count { it.isWeekend },
-                notifAccessGranted = Permissions.hasNotificationAccess(ctx),
-                locationGranted = ctx.checkSelfPermission(
+                // 데모는 이 기기의 권한과 무관하다. 데이터가 실제로 들어 있는지로 답한다.
+                notifAccessGranted = if (demo) notifs.isNotEmpty()
+                else Permissions.hasNotificationAccess(ctx),
+                locationGranted = if (demo) netChanges.any { it.ssid != null }
+                else ctx.checkSelfPermission(
                     android.Manifest.permission.ACCESS_FINE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED,
                 fullDayFallback = fullDayFallback,
@@ -333,7 +347,7 @@ class Analyzer(private val ctx: Context) {
                 systemInterruptEvents = raw.count { it.type == EVENT_NOTIFICATION_INTERRUPTION },
                 notifListenerSince = notifSince,
                 netChangeRecords = netChanges.size,
-                usageAccessGranted = Permissions.hasUsageAccess(ctx),
+                usageAccessGranted = if (demo) true else Permissions.hasUsageAccess(ctx),
             ),
         )
     }
@@ -524,7 +538,7 @@ class Analyzer(private val ctx: Context) {
         20 -> "포그라운드 서비스 종료"
         26 -> "기기 종료"
         27 -> "기기 시작"
-        else -> "기타 (type=${'$'}t)"
+        else -> "기타 (type=$t)"
     }
 }
 

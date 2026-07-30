@@ -1,6 +1,7 @@
 package com.routineai
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.webkit.WebView
@@ -10,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -32,11 +35,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +64,8 @@ import com.routineai.analysis.Report
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
+import com.routineai.data.Db
+import com.routineai.interpret.AzureConfig
 import com.routineai.interpret.Interpreter
 import com.routineai.interpret.Settings
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +80,13 @@ private val OK = Color(0xFF0CA30C)
 private val NEED = Color(0xFFD03B3B)
 private val WARN = Color(0xFFEDA100)
 
+/**
+ * 화면 구성.
+ *
+ * 이 앱의 값어치는 "며칠치가 쌓였는가"에 있다. 그래서 누적 상태를 탭 위에 상시로 두고,
+ * 목적에 해당하는 대시보드·해석을 앞 탭에, 한 번 맞춰두면 다시 안 보는 권한·수집·해석
+ * 연결은 설정 탭 하나로 몰았다.
+ */
 class MainActivity : ComponentActivity() {
 
     private val json = Json { encodeDefaults = true }
@@ -80,6 +94,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { MaterialTheme { Root() } }
+    }
+
+    /** 탭 위에 상시로 띄우는 누적 상태 */
+    private data class CollectStatus(
+        val storedEvents: Int,
+        val oldestTs: Long?,
+        val newestTs: Long?,
+        val lastCollectTs: Long?,
+    ) {
+        /** 관측 기간(일). 첫 기록과 마지막 기록 사이를 센다. */
+        val spanDays: Int
+            get() = if (oldestTs != null && newestTs != null)
+                ((newestTs - oldestTs) / 86_400_000L + 1).toInt() else 0
+    }
+
+    private suspend fun loadStatus(ctx: Context): CollectStatus {
+        val dao = Db.get(ctx).dao()
+        return CollectStatus(
+            storedEvents = dao.eventCount(),
+            oldestTs = dao.firstEventTs(),
+            newestTs = dao.lastEventTs(),
+            lastCollectTs = dao.get(UsageCollector.KEY_LAST_SYNC)?.toLongOrNull(),
+        )
     }
 
     // ------------------------------------------------------------------
@@ -107,43 +144,52 @@ class MainActivity : ComponentActivity() {
                 PackageManager.PERMISSION_GRANTED
         }
 
+        var statusTick by remember { mutableIntStateOf(0) }
+        var status by remember { mutableStateOf<CollectStatus?>(null) }
+        LaunchedEffect(statusTick, permTick) {
+            status = withContext(Dispatchers.IO) { loadStatus(ctx) }
+        }
+
         var tab by remember { mutableIntStateOf(0) }
         var busy by remember { mutableStateOf(false) }
         var step by remember { mutableStateOf("") }
         var collectMsg by remember { mutableStateOf("") }
-        var reportJson by remember { mutableStateOf<String?>(null) }
+
+        // 마지막 리포트를 들고 시작한다. 회전하거나 앱을 다시 켜도 대시보드가 비지 않는다.
+        var reportJson by remember { mutableStateOf(prefs.lastReport.ifBlank { null }) }
+        var reportAt by remember { mutableStateOf(prefs.lastReportAt) }
         var reportMsg by remember { mutableStateOf("") }
         var interpretation by remember { mutableStateOf(prefs.lastInterpretation) }
+        var azure by remember { mutableStateOf(prefs.azureConfig()) }
+        // 에셋이 없는 빌드(저장소를 클론해서 빌드한 경우)에서는 데모를 켤 수 없다.
+        // 이전에 켜둔 상태로 저장돼 있어도 여기서 내려야 첫 질의에서 안 터진다.
+        val demoAvailable = remember { Db.hasDemoAsset(ctx) }
+        var demo by remember { mutableStateOf(prefs.demoMode && demoAvailable) }
 
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
-                Text(
-                    "RoutineAI",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(16.dp, 14.dp, 16.dp, 8.dp),
-                )
+                StatusHeader(status, usageOk, demo)
+
                 TabRow(selectedTabIndex = tab) {
-                    listOf("권한", "수집", "대시보드", "해석").forEachIndexed { i, t ->
+                    listOf("대시보드", "해석", "설정").forEachIndexed { i, t ->
                         Tab(
                             selected = tab == i,
                             onClick = { tab = i },
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(t)
-                                    val bad = when (i) {
-                                        0 -> !usageOk
-                                        1 -> usageOk && collectMsg.isBlank()
-                                        else -> false
-                                    }
-                                    if (bad) {
+                                    // 설정 탭에만 표시한다. 필수 권한이 꺼졌으면 빨강,
+                                    // 해석 연결이 비었으면 노랑.
+                                    if (i == 2 && (!usageOk || !azure.isComplete)) {
                                         Spacer(Modifier.size(5.dp))
-                                        Dot(if (i == 0) NEED else WARN)
+                                        Dot(if (!usageOk) NEED else WARN)
                                     }
                                 }
                             },
                         )
                     }
                 }
+
                 if (busy) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     if (step.isNotBlank()) {
@@ -157,8 +203,82 @@ class MainActivity : ComponentActivity() {
 
                 Box(Modifier.fillMaxSize()) {
                     when (tab) {
-                        0 -> PermissionTab(usageOk, notifOk, locOk) { permTick++ }
-                        1 -> CollectTab(usageOk, busy, collectMsg,
+                        0 -> DashboardTab(
+                            usageOk = usageOk || demo, busy = busy, msg = reportMsg,
+                            reportJson = reportJson, reportAt = reportAt, demo = demo,
+                            onGoSettings = { tab = 2 },
+                            onBuild = {
+                                busy = true; step = "시작하는 중"
+                                lifecycleScope.launch {
+                                    val report: Report = withContext(Dispatchers.Default) {
+                                        Analyzer(ctx, demo).build { s ->
+                                            lifecycleScope.launch { step = s }
+                                        }
+                                    }
+                                    val encoded =
+                                        json.encodeToString(Report.serializer(), report)
+                                    reportJson = encoded
+                                    reportAt = System.currentTimeMillis()
+                                    prefs.lastReport = encoded
+                                    prefs.lastReportAt = reportAt
+                                    val d = report.diagnostics
+                                    reportMsg = buildString {
+                                        appendLine("이벤트 ${d.storedEvents}건 · 세션 ${d.sessionsBuilt}개")
+                                        appendLine(
+                                            "온전한 하루 ${report.meta.fullDays.size}일 · " +
+                                                "부분일 ${report.meta.partialDays.size}일"
+                                        )
+                                        if (report.quality.warnings.isNotEmpty()) {
+                                            append("경고 ${report.quality.warnings.size}건 — 대시보드 위쪽 확인")
+                                        }
+                                    }
+                                    busy = false; step = ""
+                                }
+                            },
+                        )
+
+                        1 -> InterpretTab(
+                            busy = busy, hasReport = reportJson != null,
+                            azure = azure, interpretation = interpretation,
+                            onGoSettings = { tab = 2 },
+                            onInterpret = {
+                                busy = true; step = "해석 요청 중 (최대 2분)"
+                                lifecycleScope.launch {
+                                    val rj = reportJson
+                                    if (rj == null) { busy = false; step = ""; return@launch }
+                                    val res = withContext(Dispatchers.IO) {
+                                        Interpreter(ctx).interpret(rj, azure)
+                                    }
+                                    interpretation = res.getOrElse { "해석 실패: ${it.message}" }
+                                    prefs.lastInterpretation = interpretation
+                                    busy = false; step = ""
+                                }
+                            },
+                        )
+
+                        else -> SettingsTab(
+                            usageOk = usageOk, notifOk = notifOk, locOk = locOk,
+                            busy = busy, collectMsg = collectMsg, azure = azure,
+                            demo = demo, demoAvailable = demoAvailable,
+                            onDemoChange = {
+                                demo = it
+                                prefs.demoMode = it
+                                // 이전 리포트는 반대쪽 데이터로 만든 것이라 그대로 두면
+                                // 어느 쪽 결과인지 알 수 없다. 버리고 다시 만들게 한다.
+                                reportJson = null
+                                reportMsg = ""
+                                reportAt = 0L
+                                prefs.lastReport = ""
+                                prefs.lastReportAt = 0L
+                            },
+                            onPermChanged = { permTick++ },
+                            onAzureChange = {
+                                azure = it
+                                prefs.azureEndpoint = it.endpoint
+                                prefs.azureApiKey = it.apiKey
+                                prefs.azureApiVersion = it.apiVersion
+                                prefs.azureDeployment = it.deployment
+                            },
                             onCollect = {
                                 busy = true; step = "이벤트 읽는 중"
                                 lifecycleScope.launch {
@@ -169,51 +289,13 @@ class MainActivity : ComponentActivity() {
                                     collectMsg = buildString {
                                         appendLine("이번에 읽은 이벤트 ${r.scanned}건")
                                         appendLine("DB 누적 ${r.totalStored}건")
-                                        r.oldestStored?.let { appendLine("가장 오래된 기록 ${fmt(it)}") }
+                                        r.oldestStored?.let {
+                                            appendLine("가장 오래된 기록 ${fmt(it)}")
+                                        }
                                         append("조회 구간 ${fmt(r.windowFrom)} ~ ${fmt(r.windowTo)}")
                                     }
                                     busy = false; step = ""
-                                }
-                            },
-                            onGoPerm = { tab = 0 })
-
-                        2 -> DashboardTab(
-                            busy = busy, msg = reportMsg, reportJson = reportJson,
-                            onBuild = {
-                                busy = true; step = "시작하는 중"
-                                lifecycleScope.launch {
-                                    val report: Report = withContext(Dispatchers.Default) {
-                                        Analyzer(ctx).build { s ->
-                                            lifecycleScope.launch { step = s }
-                                        }
-                                    }
-                                    reportJson = json.encodeToString(Report.serializer(), report)
-                                    val d = report.diagnostics
-                                    reportMsg = buildString {
-                                        appendLine("이벤트 ${d.storedEvents}건 · 세션 ${d.sessionsBuilt}개")
-                                        appendLine("온전한 하루 ${report.meta.fullDays.size}일 · 부분일 ${report.meta.partialDays.size}일")
-                                        if (report.quality.warnings.isNotEmpty()) {
-                                            append("경고 ${report.quality.warnings.size}건 — 대시보드 위쪽 확인")
-                                        }
-                                    }
-                                    busy = false; step = ""
-                                }
-                            },
-                        )
-
-                        else -> InterpretTab(
-                            busy = busy, hasReport = reportJson != null,
-                            interpretation = interpretation, prefs = prefs,
-                            onInterpret = { key ->
-                                busy = true; step = "해석 요청 중 (최대 2분)"
-                                lifecycleScope.launch {
-                                    val rj = reportJson ?: return@launch
-                                    val res = withContext(Dispatchers.IO) {
-                                        Interpreter(ctx).interpret(rj, key)
-                                    }
-                                    interpretation = res.getOrElse { "해석 실패: ${it.message}" }
-                                    prefs.lastInterpretation = interpretation
-                                    busy = false; step = ""
+                                    statusTick++
                                 }
                             },
                         )
@@ -225,137 +307,79 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------
 
+    /**
+     * 상시 상태 바.
+     *
+     * 이 앱은 오래 쓸수록 값어치가 커지는 구조라, 지금 며칠치가 쌓였고 마지막 수집이
+     * 언제였는지가 항상 보여야 한다. 예전에는 수집 탭에 들어가야만 보였다.
+     */
     @Composable
-    private fun PermissionTab(
-        usageOk: Boolean, notifOk: Boolean, locOk: Boolean, onChanged: () -> Unit,
-    ) {
-        val ctx = LocalContext.current
-        val locLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { onChanged() }
-
-        Column(
-            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (!usageOk) {
-                Card(colors = CardDefaults.cardColors(containerColor = NEED.copy(alpha = .10f))) {
-                    Text(
-                        "'사용 정보 접근'이 꺼져 있으면 데이터가 하나도 들어오지 않습니다. " +
-                            "리포트를 만들어도 전부 0으로 나옵니다.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
-
-            PermCard(
-                title = "사용 정보 접근",
-                required = true,
-                granted = usageOk,
-                what = "앱 실행·화면 켜짐·잠금 해제 이벤트를 읽습니다. 이 앱의 모든 통계가 여기서 나옵니다.",
-                without = "리포트가 전부 0이 됩니다.",
-                where = "설정 → 특별한 앱 접근 → 사용 정보 접근 → RoutineAI 허용",
-                onClick = { Permissions.openUsageAccessSettings(ctx) },
-            )
-            PermCard(
-                title = "알림 접근",
-                required = false,
-                granted = notifOk,
-                what = "알림이 도착한 시각과 발신 앱을 기록합니다. 본문은 읽지 않습니다.",
-                without = "알림 지표만 비고 나머지는 정상 동작합니다.",
-                where = "설정 → 알림 → 고급 설정 → 알림 접근 → RoutineAI 허용",
-                onClick = { Permissions.openNotificationAccessSettings(ctx) },
-            )
-            PermCard(
-                title = "위치 권한",
-                required = false,
-                granted = locOk,
-                what = "접속한 Wi-Fi 이름을 읽어 장소 축을 만듭니다. 위치 좌표는 쓰지 않습니다.",
-                without = "장소가 'wifi'로만 뭉뚱그려집니다.",
-                where = "아래 버튼을 누르면 시스템 대화상자가 뜹니다",
-                onClick = { locLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-            )
-
-            HorizontalDivider()
-            Text(
-                "권한을 켜고 돌아오면 이 화면이 자동으로 갱신됩니다.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(40.dp))
-        }
-    }
-
-    @Composable
-    private fun PermCard(
-        title: String, required: Boolean, granted: Boolean,
-        what: String, without: String, where: String, onClick: () -> Unit,
-    ) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Dot(if (granted) OK else if (required) NEED else WARN)
+    private fun StatusHeader(status: CollectStatus?, usageOk: Boolean, demo: Boolean) {
+        Column(Modifier.fillMaxWidth().padding(16.dp, 14.dp, 16.dp, 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("RoutineAI", style = MaterialTheme.typography.titleLarge)
+                if (demo) {
                     Spacer(Modifier.size(8.dp))
-                    Text(title, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        if (granted) "허용됨" else if (required) "필수 · 꺼짐" else "선택 · 꺼짐",
-                        color = if (granted) OK else if (required) NEED else WARN,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                    Chip("데모 데이터", WARN)
                 }
-                Text(what, style = MaterialTheme.typography.bodySmall)
-                if (!granted) {
-                    Text("끄면: $without", style = MaterialTheme.typography.bodySmall)
-                    Text(where, style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = onClick) { Text("설정 열기") }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (demo) {
+                Text(
+                    "리포트를 데모 로그로 만듭니다. 아래 누적 수치는 이 기기의 실제 기록입니다.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = WARN,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+
+            if (status == null) {
+                Text("상태 확인 중", style = MaterialTheme.typography.labelSmall)
+            } else if (status.storedEvents == 0) {
+                Text(
+                    if (usageOk) "아직 수집된 기록이 없습니다 — 설정 탭에서 '지금 수집'"
+                    else "'사용 정보 접근'이 꺼져 있습니다 — 설정 탭에서 켜주세요",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (usageOk) WARN else NEED,
+                )
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Chip("누적 ${status.storedEvents.formatted()}건")
+                    Chip("${status.spanDays}일치")
+                    status.oldestTs?.let { o ->
+                        status.newestTs?.let { n -> Chip("${fmtDay(o)} ~ ${fmtDay(n)}") }
+                    }
+                    Chip(
+                        status.lastCollectTs?.let { "수집 ${ago(it)}" } ?: "수집 기록 없음",
+                        if (status.lastCollectTs.isStale()) WARN else Color.Unspecified,
+                    )
+                    if (!usageOk) Chip("권한 꺼짐", NEED)
                 }
             }
         }
     }
 
     @Composable
-    private fun CollectTab(
-        usageOk: Boolean, busy: Boolean, msg: String,
-        onCollect: () -> Unit, onGoPerm: () -> Unit,
-    ) {
-        Column(
-            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    private fun Chip(text: String, tint: Color = Color.Unspecified) {
+        Surface(
+            shape = RoundedCornerShape(99.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             Text(
-                "안드로이드는 사용 이벤트를 며칠치만 보관하다 지웁니다. 이 앱은 주기적으로 읽어 " +
-                    "자체 DB에 누적하므로, 오래 쓸수록 분석 가능한 기간이 길어집니다.",
-                style = MaterialTheme.typography.bodySmall,
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (tint == Color.Unspecified)
+                    MaterialTheme.colorScheme.onSurfaceVariant else tint,
+                modifier = Modifier.padding(9.dp, 4.dp),
             )
-            if (!usageOk) {
-                Card(colors = CardDefaults.cardColors(containerColor = NEED.copy(alpha = .10f))) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("'사용 정보 접근'이 꺼져 있어 수집할 수 없습니다.",
-                            style = MaterialTheme.typography.bodySmall)
-                        OutlinedButton(onClick = onGoPerm) { Text("권한 탭으로") }
-                    }
-                }
-            }
-            Button(enabled = usageOk && !busy, onClick = onCollect) { Text("지금 수집") }
-            if (msg.isNotBlank()) {
-                Card(Modifier.fillMaxWidth()) {
-                    Text(msg, style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp))
-                }
-            }
-            HorizontalDivider()
-            Text("자동 수집", fontWeight = FontWeight.SemiBold)
-            Text(
-                "6시간마다 백그라운드에서 돕니다. 시스템이 이벤트를 며칠은 들고 있어서 " +
-                    "이 주기로도 유실되지 않습니다.\n\n" +
-                    "첫 수집에는 시스템이 갖고 있던 며칠치만 들어옵니다. 기간이 늘어나는 건 " +
-                    "며칠 지난 뒤부터입니다.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(40.dp))
         }
     }
+
+    // ------------------------------------------------------------------
 
     /**
      * 대시보드 탭.
@@ -366,19 +390,44 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun DashboardTab(
-        busy: Boolean, msg: String, reportJson: String?, onBuild: () -> Unit,
+        usageOk: Boolean, busy: Boolean, msg: String, reportJson: String?,
+        reportAt: Long, demo: Boolean, onBuild: () -> Unit, onGoSettings: () -> Unit,
     ) {
         Column(Modifier.fillMaxSize()) {
             Column(
                 Modifier.padding(16.dp, 12.dp, 16.dp, 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(enabled = !busy, onClick = onBuild) { Text("리포트 생성") }
-                if (msg.isNotBlank()) {
-                    Text(msg, style = MaterialTheme.typography.bodySmall)
+                if (!usageOk) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = NEED.copy(alpha = .10f)
+                        )
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "'사용 정보 접근'이 꺼져 있어 리포트가 전부 0으로 나옵니다.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            OutlinedButton(onClick = onGoSettings) { Text("설정 탭으로") }
+                        }
+                    }
                 }
-                if (reportJson == null && !busy) {
+                Button(enabled = !busy, onClick = onBuild) {
                     Text(
+                        (if (demo) "데모 " else "") +
+                            (if (reportJson == null) "리포트 생성" else "리포트 다시 생성")
+                    )
+                }
+                when {
+                    msg.isNotBlank() ->
+                        Text(msg, style = MaterialTheme.typography.bodySmall)
+                    // 이전에 만들어둔 리포트를 복원한 경우
+                    reportJson != null && reportAt > 0L -> Text(
+                        "${fmt(reportAt)}에 만든 리포트입니다. 새 기록을 반영하려면 다시 생성하세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    !busy -> Text(
                         "리포트를 만들면 여기에 대시보드가 나타납니다. 아래 영역은 좌우·상하로 스크롤됩니다.",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -436,40 +485,36 @@ class MainActivity : ComponentActivity() {
         wv.evaluateJavascript("window.renderReport($json);", null)
     }
 
+    // ------------------------------------------------------------------
+
     @Composable
     private fun InterpretTab(
-        busy: Boolean, hasReport: Boolean, interpretation: String,
-        prefs: Settings, onInterpret: (String) -> Unit,
+        busy: Boolean, hasReport: Boolean, azure: AzureConfig,
+        interpretation: String, onInterpret: () -> Unit, onGoSettings: () -> Unit,
     ) {
-        var apiKey by remember { mutableStateOf(prefs.apiKey) }
         Column(
             Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "집계 수치만 전송합니다. 원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
+                "집계 수치만 Azure OpenAI 로 전송합니다. " +
+                    "원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
+
             if (!hasReport) {
-                Card(colors = CardDefaults.cardColors(containerColor = WARN.copy(alpha = .12f))) {
-                    Text(
-                        "먼저 대시보드 탭에서 리포트를 생성해 주세요.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(12.dp),
-                    )
+                Notice(WARN, "먼저 대시보드 탭에서 리포트를 생성해 주세요.")
+            }
+            if (!azure.isComplete) {
+                Notice(WARN, "해석 연결이 설정되지 않았습니다: ${azure.missing.joinToString(", ")}") {
+                    OutlinedButton(onClick = onGoSettings) { Text("설정 탭으로") }
                 }
             }
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it; prefs.apiKey = it },
-                label = { Text("Anthropic API 키") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+
             Button(
-                enabled = hasReport && apiKey.isNotBlank() && !busy,
-                onClick = { onInterpret(apiKey) },
-            ) { Text("해석 요청") }
+                enabled = hasReport && azure.isComplete && !busy,
+                onClick = onInterpret,
+            ) { Text(if (interpretation.isBlank()) "해석 요청" else "다시 해석") }
 
             if (interpretation.isNotBlank()) {
                 HorizontalDivider()
@@ -479,11 +524,280 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------------------------------------------
+
+    /**
+     * 설정 탭.
+     *
+     * 권한 → 수집 → 해석 연결 순서로 둔다. 위에서부터 채우면 앱이 동작하도록
+     * 하려는 것이고, 앞의 것이 안 되어 있으면 뒤의 것은 소용이 없다는 뜻이기도 하다.
+     */
+    @Composable
+    private fun SettingsTab(
+        usageOk: Boolean, notifOk: Boolean, locOk: Boolean, busy: Boolean,
+        collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
+        onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
+        onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
+    ) {
+        val ctx = LocalContext.current
+        val locLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { onPermChanged() }
+
+        Column(
+            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // ---- 0. 데모 ----
+            //
+            // 맨 위에 둔다. 권한을 하나도 안 켠 새 기기에서도 이것만 켜면
+            // 대시보드와 해석이 바로 돌아가는 것이 데모의 목적이다.
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("데모 데이터", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (demoAvailable)
+                                "앱에 들어 있는 예시 로그로 리포트를 만듭니다. 권한도 수집도 " +
+                                    "필요 없습니다. 이 기기의 실제 기록은 그대로 쌓이고, 끄면 돌아옵니다."
+                            else
+                                "이 빌드에는 데모 로그가 들어 있지 않습니다. 실제 사용 기록이라 " +
+                                    "저장소에 올리지 않기 때문입니다. 쓰려면 " +
+                                    "app/src/main/assets/demo/routine.db 에 파일을 넣고 다시 빌드하세요.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.size(10.dp))
+                    Switch(
+                        checked = demo,
+                        enabled = demoAvailable,
+                        onCheckedChange = onDemoChange,
+                    )
+                }
+            }
+            if (demo) {
+                Notice(
+                    WARN,
+                    "데모 모드입니다. 대시보드·해석 탭의 결과는 예시 로그로 만든 것이며 " +
+                        "이 기기의 사용 기록이 아닙니다."
+                )
+            }
+
+            // ---- 1. 권한 ----
+            Section("1. 권한", "설치만으로는 아무것도 켜지지 않습니다. 직접 허용해야 합니다.")
+            if (!usageOk) {
+                Notice(
+                    NEED,
+                    "'사용 정보 접근'이 꺼져 있으면 데이터가 하나도 들어오지 않습니다. " +
+                        "리포트를 만들어도 전부 0으로 나옵니다."
+                )
+            }
+            PermCard(
+                title = "사용 정보 접근",
+                required = true,
+                granted = usageOk,
+                what = "앱 실행·화면 켜짐·잠금 해제 이벤트를 읽습니다. 이 앱의 모든 통계가 여기서 나옵니다.",
+                without = "리포트가 전부 0이 됩니다.",
+                where = "설정 → 특별한 앱 접근 → 사용 정보 접근 → RoutineAI 허용",
+                onClick = { Permissions.openUsageAccessSettings(ctx) },
+            )
+            PermCard(
+                title = "알림 접근",
+                required = false,
+                granted = notifOk,
+                what = "알림이 도착한 시각과 발신 앱을 기록합니다. 본문은 읽지 않습니다.",
+                without = "알림 지표만 비고 나머지는 정상 동작합니다.",
+                where = "설정 → 알림 → 고급 설정 → 알림 접근 → RoutineAI 허용",
+                onClick = { Permissions.openNotificationAccessSettings(ctx) },
+            )
+            PermCard(
+                title = "위치 권한",
+                required = false,
+                granted = locOk,
+                what = "접속한 Wi-Fi 이름을 읽어 장소 축을 만듭니다. 위치 좌표는 쓰지 않습니다.",
+                without = "장소가 'wifi'로만 뭉뚱그려집니다.",
+                where = "아래 버튼을 누르면 시스템 대화상자가 뜹니다",
+                onClick = { locLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
+            )
+            Text(
+                "권한을 켜고 돌아오면 이 화면이 자동으로 갱신됩니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            // ---- 2. 수집 ----
+            Section(
+                "2. 수집",
+                "안드로이드는 사용 이벤트를 며칠치만 보관하다 지웁니다. 이 앱은 주기적으로 " +
+                    "읽어 자체 DB에 누적하므로, 오래 쓸수록 분석 가능한 기간이 길어집니다.",
+            )
+            Button(enabled = usageOk && !busy, onClick = onCollect) { Text("지금 수집") }
+            if (collectMsg.isNotBlank()) {
+                Card(Modifier.fillMaxWidth()) {
+                    Text(
+                        collectMsg,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
+            Text(
+                "자동 수집은 6시간마다 백그라운드에서 돕니다. 시스템이 이벤트를 며칠은 " +
+                    "들고 있어서 이 주기로도 유실되지 않습니다.\n\n" +
+                    "첫 수집에는 시스템이 갖고 있던 며칠치만 들어옵니다. 기간이 늘어나는 건 " +
+                    "며칠 지난 뒤부터입니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            // ---- 3. 해석 연결 ----
+            Section(
+                "3. 해석 연결 (선택)",
+                "비워두면 앱은 완전히 오프라인으로 동작합니다. 채우면 해석 탭에서 " +
+                    "집계 결과를 Azure OpenAI 에 보내 해석을 받을 수 있습니다.",
+            )
+            ConfigField(
+                label = "AZURE_OPENAI_ENDPOINT",
+                value = azure.endpoint,
+                placeholder = "https://<리소스>.openai.azure.com",
+                onChange = { onAzureChange(azure.copy(endpoint = it)) },
+            )
+            ConfigField(
+                label = "AZURE_OPENAI_API_KEY",
+                value = azure.apiKey,
+                placeholder = "Azure 포털 → 키 및 엔드포인트",
+                onChange = { onAzureChange(azure.copy(apiKey = it)) },
+            )
+            ConfigField(
+                label = "AZURE_OPENAI_API_VERSION",
+                value = azure.apiVersion,
+                placeholder = Settings.DEFAULT_API_VERSION,
+                onChange = { onAzureChange(azure.copy(apiVersion = it)) },
+            )
+            ConfigField(
+                label = "AZURE_OPENAI_DEPLOYMENT",
+                value = azure.deployment,
+                placeholder = "배포 이름",
+                note = "모델 이름이 아니라 배포에 붙인 이름입니다.",
+                onChange = { onAzureChange(azure.copy(deployment = it)) },
+            )
+            // 404 가 나면 대개 이 주소가 틀린 것이다. 눈으로 확인할 수 있게 그대로 띄운다.
+            // API 키는 헤더로 가므로 이 문자열에는 들어가지 않는다.
+            if (azure.endpoint.isNotBlank() && azure.deployment.isNotBlank()) {
+                Text(
+                    "요청 주소\n${azure.chatCompletionsUrl()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (azure.missing.isNotEmpty()) {
+                Text(
+                    "비어 있는 항목: ${azure.missing.joinToString(", ")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WARN,
+                )
+            }
+            Spacer(Modifier.height(40.dp))
+        }
+    }
+
+    // ------------------------------------------------------------------
+
+    @Composable
+    private fun Section(title: String, subtitle: String) {
+        Spacer(Modifier.height(6.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(4.dp))
+        Text(title, fontWeight = FontWeight.SemiBold)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall)
+    }
+
+    @Composable
+    private fun Notice(tint: Color, text: String, action: @Composable (() -> Unit)? = null) {
+        Card(colors = CardDefaults.cardColors(containerColor = tint.copy(alpha = .12f))) {
+            Column(Modifier.padding(12.dp)) {
+                Text(text, style = MaterialTheme.typography.bodySmall)
+                action?.invoke()
+            }
+        }
+    }
+
+    @Composable
+    private fun PermCard(
+        title: String, required: Boolean, granted: Boolean,
+        what: String, without: String, where: String, onClick: () -> Unit,
+    ) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Dot(if (granted) OK else if (required) NEED else WARN)
+                    Spacer(Modifier.size(8.dp))
+                    Text(title, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (granted) "허용됨" else if (required) "필수 · 꺼짐" else "선택 · 꺼짐",
+                        color = if (granted) OK else if (required) NEED else WARN,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                Text(what, style = MaterialTheme.typography.bodySmall)
+                if (!granted) {
+                    Text("끄면: $without", style = MaterialTheme.typography.bodySmall)
+                    Text(where, style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = onClick) { Text("설정 열기") }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ConfigField(
+        label: String, value: String, placeholder: String,
+        note: String? = null, onChange: (String) -> Unit,
+    ) {
+        val support: (@Composable () -> Unit)? = note?.let { n ->
+            { Text(n, style = MaterialTheme.typography.labelSmall) }
+        }
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+            placeholder = {
+                Text(placeholder, style = MaterialTheme.typography.bodySmall)
+            },
+            supportingText = support,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
     @Composable
     private fun Dot(color: Color) {
         Box(Modifier.size(9.dp).clip(CircleShape).background(color))
     }
 
+    // ------------------------------------------------------------------
+
     private fun fmt(ts: Long): String =
         SimpleDateFormat("MM/dd HH:mm", Locale.KOREAN).format(Date(ts))
+
+    private fun fmtDay(ts: Long): String =
+        SimpleDateFormat("MM/dd", Locale.KOREAN).format(Date(ts))
+
+    private fun ago(ts: Long): String {
+        val d = System.currentTimeMillis() - ts
+        return when {
+            d < 60_000 -> "방금"
+            d < 3_600_000 -> "${d / 60_000}분 전"
+            d < 86_400_000 -> "${d / 3_600_000}시간 전"
+            else -> "${d / 86_400_000}일 전"
+        }
+    }
+
+    /** 자동 수집이 6시간 주기라, 그 두 배가 넘게 조용하면 눈에 띄게 한다. */
+    private fun Long?.isStale(): Boolean =
+        this == null || System.currentTimeMillis() - this > 12L * 60 * 60 * 1000
+
+    private fun Int.formatted(): String = String.format(Locale.KOREAN, "%,d", this)
 }

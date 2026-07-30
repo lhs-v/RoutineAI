@@ -70,6 +70,9 @@ const el=(t,a={},p)=>{const n=document.createElementNS(NS,t);
 const cs=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const hm=m=>String(Math.floor(m/60)%24).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
 const r1=v=>Math.round(v*10)/10;
+/* 기기 표준시 기준 날짜. toISOString() 은 UTC 라 한국 시간 오전 9시 이전이 하루 밀린다. */
+const ymd=ts=>{const d=new Date(ts),p=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());};
 
 function svgIn(host,w,h){host.innerHTML="";
   const s=el("svg",{viewBox:`0 0 ${w} ${h}`,preserveAspectRatio:"xMidYMid meet"});
@@ -125,7 +128,7 @@ window.renderReport=function(D){
   /* 메타 */
   add(`<div>${[
     m.device, m.tz,
-    new Date(m.spanFrom).toISOString().slice(0,10)+" ~ "+new Date(m.spanTo).toISOString().slice(0,10),
+    ymd(m.spanFrom)+" ~ "+ymd(m.spanTo),
     "온전한 하루 "+m.fullDays.length+"일",
     "부분일 "+m.partialDays.length+"일",
     "이벤트 "+m.eventCount.toLocaleString()+"건",

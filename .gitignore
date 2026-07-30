@@ -16,3 +16,7 @@ local.properties
 build/
 .kotlin/
 *.hprof
+
+# 데모 로그. 실제 기기에서 뽑은 사용 기록이라 저장소에 올리지 않는다.
+# 넣는 방법은 BUILD.md 참고. 없으면 설정 탭의 데모 토글이 꺼진 채 잠긴다.
+app/src/main/assets/demo/routine.db
