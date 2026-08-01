@@ -35,6 +35,12 @@ object Applier {
     /** 분할 토글과 인접 실행 사이에 시스템이 창을 정리할 틈 */
     private const val SPLIT_STEP_MS = 450L
 
+    /**
+     * 분할화면을 시도할 최소 화면 폭(dp).
+     * 폴더블 커버 화면은 sw480dp 수준이라 시스템이 분할을 거부한다.
+     */
+    private const val MIN_SPLIT_DP = 600
+
     /** 적용 결과. [real] 이 false 면 사용자가 마무리해야 한다는 뜻이다. */
     data class Result(val ok: Boolean, val message: String, val real: Boolean)
 
@@ -81,6 +87,12 @@ object Applier {
         val base = anchor ?: pkgs[0]
         if (intentFor(ctx, other) == null) return Result(false, "$other 를 찾을 수 없습니다", false)
 
+        // 폴더블은 내부(sw875dp)와 커버(sw480dp)의 설정이 다르다. 오버레이는
+        // 애플리케이션 컨텍스트로 도는데 그쪽 설정이 지금 보고 있는 화면과
+        // 어긋날 수 있어, 실제 창 크기에서 폭을 구한다.
+        val widthDp = currentWidthDp(ctx)
+        val a11y = PatternAccessibilityService.isConnected()
+
         return runCatching {
             // 앵커가 없으면(제안 탭에서 누른 경우) 기준 앱부터 띄운다.
             if (anchor == null) {
@@ -91,11 +103,13 @@ object Applier {
             }
 
             // 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
-            // 없으면 인접 실행만 시도한다 — 단일 화면에서는 순차 실행으로
-            // 보이지만, 아무것도 안 되는 것보다는 두 앱을 다 여는 편이 낫다.
-            val split = PatternAccessibilityService.isConnected() &&
+            // 다만 좁은 화면(폴더블 커버 등)에서는 시스템이 분할 자체를
+            // 지원하지 않아 토글이 무시된다 — 실측으로 확인한 지점이다.
+            val toggled = if (a11y && widthDp >= MIN_SPLIT_DP) {
                 PatternAccessibilityService.toggleSplitScreen()
-            if (split) Thread.sleep(SPLIT_STEP_MS)
+            } else false
+            Log.i(TAG, "앱페어: a11y=$a11y widthDp=$widthDp toggled=$toggled")
+            if (toggled) Thread.sleep(SPLIT_STEP_MS)
 
             ctx.startActivity(
                 intentFor(ctx, other)!!.addFlags(
@@ -104,16 +118,17 @@ object Applier {
                         Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
                 )
             )
-            if (split) {
-                Result(true, "두 앱을 분할화면으로 열었습니다", real = true)
-            } else {
-                Result(
-                    true,
-                    "두 앱을 열었습니다. 분할화면으로 나누려면 설정에서 접근성을 켜주세요",
-                    real = true,
-                )
-            }
-        }.getOrElse { Result(false, "분할화면 실행 실패: ${it.message}", real = false) }
+            Result(true, splitMessage(toggled, a11y, widthDp), real = true)
+        }.getOrElse { Result(false, "앱페어 실행 실패: ${it.message}", real = false) }
+    }
+
+    /** 왜 분할이 안 됐는지를 사용자가 알 수 있게 구분해 알린다. */
+    private fun splitMessage(toggled: Boolean, a11y: Boolean, widthDp: Int): String = when {
+        toggled -> "두 앱을 분할화면으로 열었습니다"
+        widthDp < MIN_SPLIT_DP ->
+            "두 앱을 열었습니다. 이 화면은 좁아 분할이 안 됩니다 — 펼친 화면에서 다시 시도해 보세요"
+        !a11y -> "두 앱을 열었습니다. 분할화면으로 나누려면 설정에서 접근성을 켜주세요"
+        else -> "두 앱을 열었습니다. 이 기기에서는 분할화면 전환이 지원되지 않습니다"
     }
 
     private fun launch(ctx: Context, pkg: String?): Result {
@@ -170,6 +185,14 @@ object Applier {
 
     private fun intentFor(ctx: Context, pkg: String): Intent? =
         ctx.packageManager.getLaunchIntentForPackage(pkg)
+
+    /** 지금 보고 있는 화면의 짧은 쪽 폭(dp) */
+    private fun currentWidthDp(ctx: Context): Int {
+        val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+        val b = wm.currentWindowMetrics.bounds
+        val density = ctx.resources.displayMetrics.density
+        return (minOf(b.width(), b.height()) / density).toInt()
+    }
 
     /** 오버레이 권한 요청 화면 */
     fun overlaySettings(ctx: Context) {
