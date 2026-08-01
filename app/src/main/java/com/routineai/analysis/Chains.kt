@@ -46,7 +46,11 @@ object Chains {
             .sortedBy { it.ts }
         if (launches.isEmpty()) return emptyList<ChainStat>() to emptyList()
 
-        return chains(input, launches, label) to contexts(input, launches, label)
+        val (chainStats, chainPkgs) = chains(input, launches, label)
+        // 연쇄에 등장한 앱은 실행 순위와 무관하게 맥락을 싣는다. 연쇄의 판정
+        // 재료(조건부 비율)가 빠지면, 실행이 적지만 습관이 강한 앱이
+        // 다빈도 앱에 밀려 보이지 않게 된다.
+        return chainStats to contexts(input, launches, label, chainPkgs)
     }
 
     // ------------------------------------------------------------------
@@ -84,7 +88,7 @@ object Chains {
         input: Input,
         launches: List<UsageEventRow>,
         label: (String) -> String,
-    ): List<ChainStat> {
+    ): Pair<List<ChainStat>, Set<String>> {
         val gaps = HashMap<Pair<String, String>, MutableList<Long>>()
         val days = HashMap<Pair<String, String>, MutableSet<LocalDate>>()
         var li = 0
@@ -98,22 +102,23 @@ object Chains {
             days.getOrPut(key) { HashSet() }
                 .add(Instant.ofEpochMilli(ts).atZone(input.zone).toLocalDate())
         }
-        return gaps.entries
+        val kept = gaps.entries
             .filter { it.value.size >= 3 }
             .sortedByDescending { it.value.size }
             .take(15)
-            .map { (key, g) ->
-                val s = g.sorted()
-                ChainStat(
-                    trigger = key.first,
-                    app = label(key.second),
-                    count = g.size,
-                    minGapSeconds = (s.first() / 1000.0).roundToInt(),
-                    medianGapSeconds = (s[s.size / 2] / 1000.0).roundToInt(),
-                    maxGapSeconds = (s.last() / 1000.0).roundToInt(),
-                    distinctDays = days[key]?.size ?: 0,
-                )
-            }
+        val stats = kept.map { (key, g) ->
+            val s = g.sorted()
+            ChainStat(
+                trigger = key.first,
+                app = label(key.second),
+                count = g.size,
+                minGapSeconds = (s.first() / 1000.0).roundToInt(),
+                medianGapSeconds = (s[s.size / 2] / 1000.0).roundToInt(),
+                maxGapSeconds = (s.last() / 1000.0).roundToInt(),
+                distinctDays = days[key]?.size ?: 0,
+            )
+        }
+        return stats to kept.map { it.key.second }.toSet()
     }
 
     // ------------------------------------------------------------------
@@ -122,6 +127,7 @@ object Chains {
         input: Input,
         launches: List<UsageEventRow>,
         label: (String) -> String,
+        mustInclude: Set<String>,
     ): List<AppContextStat> {
         // 실행 순간의 상태를 되짚기 위한 정렬된 타임라인들
         val netTimeline = input.netChanges.sortedBy { it.ts }
@@ -151,9 +157,11 @@ object Chains {
             return ts - prev in 0..NOTIF_LEAD_MS
         }
 
-        return launches.groupBy { it.pkg }
-            .entries.sortedByDescending { it.value.size }
-            .take(12)
+        val byPkg = launches.groupBy { it.pkg }
+        val top = byPkg.entries.sortedByDescending { it.value.size }.take(12).map { it.key }
+        val selected = (top + mustInclude.filter { it in byPkg }).distinct()
+        return selected.map { pkg -> pkg to byPkg.getValue(pkg) }
+            .sortedByDescending { it.second.size }
             .map { (pkg, list) ->
                 var cell = 0; var cellKnown = 0
                 var bt = 0

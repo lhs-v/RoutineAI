@@ -120,14 +120,36 @@ class ProposalEngine(private val ctx: Context) {
             }
         }
 
+        // 이번 분석이 다시 내지 않은 후보 중, 한 번도 노출·결정되지 않은 것은
+        // 걷어낸다. 남겨두면 분석을 돌릴 때마다 낡은 후보가 쌓인다.
+        // 수락·거절·스누즈된 것과 노출 이력이 있는 것은 사용자의 상태이므로 유지.
+        val currentSigs = parsed.proposals.filter { valid(it) }.map { signature(it) }.toSet()
+        var pruned = 0
+        for (row in dao.proposals()) {
+            if (row.state == "candidate" && row.surfacedCount == 0 &&
+                row.signature !in currentSigs
+            ) {
+                dao.logProposalEvent(
+                    ProposalEventRow(ts = now, proposalSignature = row.signature, kind = "superseded")
+                )
+                dao.deleteProposal(row.signature)
+                pruned++
+            }
+        }
+
         return Result.success(
             Outcome(added, updated, dropped, parsed.rejected, parsed.analysisNote)
         )
     }
 
-    /** 병합 키. LLM 의 id 는 실행마다 달라질 수 있으므로 쓰지 않는다. */
+    /**
+     * 병합 키. LLM 의 id 는 실행마다 달라질 수 있으므로 쓰지 않는다.
+     * params 는 정렬한다 — 앱페어의 [A,B] 와 [B,A] 는 같은 제안인데 실행마다
+     * 순서가 뒤집혀 카드가 중복 생성됐다.
+     */
     private fun signature(p: LlmProposal): String =
-        "${p.trigger.type}:${p.trigger.param.orEmpty()}>${p.action.type}:${p.action.params.joinToString(",")}"
+        "${p.trigger.type}:${p.trigger.param.orEmpty().trim()}>" +
+            "${p.action.type}:${p.action.params.map { it.trim() }.sorted().joinToString(",")}"
 
     /** 허용 목록 검증. 어긴 제안은 조용히 버리지 않고 dropped 로 센다. */
     private fun valid(p: LlmProposal): Boolean =

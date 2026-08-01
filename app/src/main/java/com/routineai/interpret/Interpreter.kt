@@ -153,7 +153,12 @@ class Interpreter(private val ctx: Context) {
      * 어느 계열인지 앱이 알 방법이 없으므로 순서대로 시도하고, 거절 사유가
      * 파라미터 불일치일 때만 다음으로 넘어간다.
      */
-    private data class Variant(val systemRole: String, val tokenKey: String)
+    private data class Variant(
+        val systemRole: String,
+        val tokenKey: String,
+        /** 재현성용 저온. 추론 계열은 temperature 를 거부하므로 폴백에는 없다. */
+        val temperature: Double? = null,
+    )
 
     private class Reply(val code: Int, val body: String) {
         val ok: Boolean get() = code in 200..299
@@ -215,6 +220,7 @@ class Interpreter(private val ctx: Context) {
                 add(buildJsonObject { put("role", "user"); put("content", user) })
             })
             put(v.tokenKey, MAX_TOKENS)
+            v.temperature?.let { put("temperature", it) }
         }
 
         val req = Request.Builder()
@@ -256,7 +262,7 @@ class Interpreter(private val ctx: Context) {
 
         /** 흔한 조합부터. 앞이 성공하면 뒤는 보내지 않는다. */
         private val VARIANTS = listOf(
-            Variant("system", "max_tokens"),
+            Variant("system", "max_tokens", temperature = 0.2),
             Variant("system", "max_completion_tokens"),
             Variant("developer", "max_completion_tokens"),
         )

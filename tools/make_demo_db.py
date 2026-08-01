@@ -299,9 +299,13 @@ def synth_bt():
 
     # 앱별로 구간을 따로 잡는다 — 합치면 뮤직 실행이 유튜브 사용 중에 섞여
     # "뮤직이 첫 앱인 구간"이 드물어지고, 사용자가 말한 습관과 반대로 나온다.
+    # 확률은 사용자가 밝힌 습관의 기울기다: 뮤직 "보통", 유튜브 "종종".
+    # 유튜브는 사용 빈도가 4배라 확률을 낮게 둬야 연쇄 횟수·조건부 비율
+    # 양쪽에서 뮤직이 우세해진다 — 0.4 로 두면 횟수가 유튜브로 쏠려
+    # "종종"이 "보통"을 덮는다 (실제로 그랬다).
     anchors = sorted(
         [(s, e, MUSIC, 0.85) for s, e in bouts_of(MUSIC)] +
-        [(s, e, TUBE, 0.40) for s, e in bouts_of(TUBE)]
+        [(s, e, TUBE, 0.18) for s, e in bouts_of(TUBE)]
     )
 
     rows = []
@@ -311,7 +315,7 @@ def synth_bt():
             continue
         if open_until is not None and start <= open_until:
             # 이미 연결 중 — connect 없이 연결만 연장 (실제 리시버와 같은 모습)
-            open_until = max(open_until, end + rng.randint(5, 25) * 60_000)
+            open_until = max(open_until, end + rng.randint(3, 10) * 60_000)
             continue
         if rng.random() >= p:
             continue
@@ -328,7 +332,9 @@ def synth_bt():
             rows.append((min(open_until, connect - rng.randint(60, 300) * 1000),
                          "disconnect", NAME, -1))
         rows.append((connect, "connect", NAME, -1))
-        open_until = end + rng.randint(5, 25) * 60_000
+        # 청취가 끝나면 곧 벗는다. 오래 끌수록 이후의 무관한 앱 실행들이
+        # "연결 중"으로 잡혀 조건부 비율이 물타기된다.
+        open_until = end + rng.randint(3, 10) * 60_000
     if open_until is not None:
         rows.append((open_until, "disconnect", NAME, -1))
 

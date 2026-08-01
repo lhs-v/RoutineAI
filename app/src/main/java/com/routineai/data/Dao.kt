@@ -80,6 +80,9 @@ interface UsageDao {
     @Query("UPDATE proposal SET state = :state, updatedAt = :at WHERE signature = :sig")
     suspend fun setProposalState(sig: String, state: String, at: Long)
 
+    @Query("DELETE FROM proposal WHERE signature = :sig")
+    suspend fun deleteProposal(sig: String)
+
     @Insert
     suspend fun logProposalEvent(row: ProposalEventRow)
 
