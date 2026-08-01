@@ -37,6 +37,16 @@ object WatchStatus {
             .groupingBy { it.category }.eachCount()
 
         val lines = ArrayList<Line>()
+        // 감지 경로가 살아 있는지가 첫 줄이어야 한다 — 이게 꺼져 있으면
+        // 나머지가 다 정상이어도 아무것도 안 뜬다(실제로 그래서 헤맸다).
+        lines += Line(
+            "감지 경로",
+            buildString {
+                append(if (WatchService.isRunning) "사용정보 감시 켜짐" else "감시 꺼짐")
+                if (PatternAccessibilityService.isConnected()) append(" + 접근성")
+            },
+            warn = !WatchService.isRunning,
+        )
         lines += Line(
             "오늘 남은 제안 횟수",
             "$budgetLeft / ${PatternWatcher.DAILY_BUDGET}",

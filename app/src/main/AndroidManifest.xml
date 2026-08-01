@@ -25,6 +25,11 @@
     <!-- 실시간 제안 팝업. 다른 앱 위에 카드 하나를 띄우는 데 필요합니다. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- 앱 전환 감시. 접근성 없이 '사용 정보 접근'만으로 도는 주 경로입니다. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- 앱 맥락 모드(유튜브 중 자동 회전 등)가 시스템 설정을 바꾸는 데 필요합니다.
          앱이 꺼지면 원복합니다. -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS"
@@ -82,6 +87,16 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+
+        <!-- 앱 전환 감시(주 경로). 사용 이벤트를 1.5초마다 읽어 트리거를 맞춘다. -->
+        <service
+            android:name=".watch.WatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="사용자가 수락한 루틴을 앱 전환 시점에 제안하기 위한 상시 감시" />
+        </service>
 
         <!-- 앱 전환을 즉시 감지해 제안 트리거를 매칭한다. 화면 내용은 읽지 않는다
              (이벤트 종류를 windowStateChanged 로 제한, 콘텐츠 접근 플래그 없음). -->

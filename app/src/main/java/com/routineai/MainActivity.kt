@@ -69,6 +69,7 @@ import com.routineai.data.ProposalRow
 import com.routineai.interpret.ProposalEngine
 import com.routineai.watch.Applier
 import com.routineai.watch.SuggestionOverlay
+import com.routineai.watch.WatchService
 import com.routineai.watch.WatchStatus
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
@@ -111,6 +112,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { MaterialTheme { Root() } }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // 포그라운드 서비스는 앱이 보일 때만 시작할 수 있다. 한 번 뜨면
+        // START_STICKY 로 유지되므로 앱을 닫아도 감시는 계속된다.
+        WatchService.start(this)
     }
 
     /** 탭 위에 상시로 띄우는 누적 상태 */
@@ -968,13 +976,13 @@ class MainActivity : ComponentActivity() {
                 onClick = { Applier.overlaySettings(ctx) },
             )
             PermCard(
-                title = "접근성 — 앱 전환 감지",
+                title = "접근성 (선택) — 더 빠른 감지·분할화면",
                 required = false,
                 granted = a11yOk,
-                what = "앱이 바뀌는 순간을 즉시 감지합니다. 화면 내용은 읽지 않습니다 " +
-                    "(콘텐츠 조회 권한을 요청하지 않았습니다).",
-                without = "앱 실행 트리거와 앱 맥락 모드가 동작하지 않습니다.",
-                where = "설정 → 접근성 → 설치된 앱 → RoutineAI",
+                what = "앱 전환을 즉시 감지하고, 분할화면 앱페어를 실제로 가릅니다. " +
+                    "없어도 '사용 정보 접근'으로 1~2초 안에 감지합니다. 화면 내용은 읽지 않습니다.",
+                without = "감지가 1~2초 늦고, 앱페어는 순차 실행으로 떨어집니다.",
+                where = "설정 → 접근성 → 설치된 앱 → RoutineAI (직접 켜야 합니다)",
                 onClick = { Applier.accessibilitySettings(ctx) },
             )
             Card(Modifier.fillMaxWidth()) {
