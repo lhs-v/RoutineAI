@@ -49,6 +49,8 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val raw = dao.events(from, now)
         val notifs = dao.notifs(from, now)
         val netChanges = dao.netChanges(from, now)
+        val btEvents = dao.btEvents(from, now)
+        val healthSessions = dao.healthSessions(from, now)
 
         val launcher = resolveLauncher()
         val system = systemPackages()
@@ -259,7 +261,20 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             .map { CountStat(label(it.key), (it.value.toDouble() / sysInterruptDays).r2()) }
 
         // ---- 장소 ----
-        val places = places(netChanges, now)
+        val ssidAlias = ssidAliases(netChanges)
+        val places = places(netChanges, ssidAlias, now)
+
+        // ---- 이벤트 연쇄 · 상태 맥락 ----
+        onStep("이벤트 연쇄 분석 중")
+        val (eventChains, appContext) = Chains.build(
+            Chains.Input(
+                raw = raw, notifs = notifs, netChanges = netChanges,
+                btEvents = btEvents, healthSessions = healthSessions,
+                ssidAlias = ssidAlias, systemPkgs = system,
+                launcherPkg = launcher, zone = zone,
+            ),
+            label = ::label,
+        )
 
         onStep("외출 지표 계산 중")
         // 다른 지표와 같은 창으로 조회한다. 통신량은 몇 달 소급되지만,
@@ -342,7 +357,8 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 device = android.os.Build.MODEL,
             ),
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
-            transitions = transitions, coUse = coUse, firstApps = first,
+            transitions = transitions, eventChains = eventChains, appContext = appContext,
+            coUse = coUse, firstApps = first,
             notifByApp = notifByApp, notifByAppInterrupt = notifByAppInterrupt,
             lastApps = lastApps, morningFirstApps = morningFirst,
             sessionAppCount = sessionAppCount,
@@ -453,16 +469,29 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
     }
 
     /**
-     * 네트워크 변경 기록으로 체류를 만든다.
-     * SSID 는 그대로 두지 않고 등장 순서대로 별칭을 준다 — 화면에 실제 이름을 띄우지 않기 위해서.
+     * SSID → 별칭(Wi-Fi A, B…) 매핑. 등장 순서대로 준다 —
+     * 화면과 리포트에 실제 이름을 띄우지 않기 위해서.
+     * places 와 이벤트 연쇄가 같은 별칭을 쓰도록 한 곳에서 만든다.
      */
-    private fun places(changes: List<com.routineai.data.NetworkChangeRow>, now: Long): List<PlaceStat> {
-        if (changes.isEmpty()) return emptyList()
-        val alias = HashMap<String, String>()
-        fun aliasOf(r: com.routineai.data.NetworkChangeRow): String = when (r.kind) {
-            "wifi" -> alias.getOrPut(r.ssid ?: "wifi-unknown") {
-                "Wi-Fi " + ('A' + alias.size)
+    private fun ssidAliases(changes: List<com.routineai.data.NetworkChangeRow>): Map<String, String> {
+        val alias = LinkedHashMap<String, String>()
+        for (r in changes.sortedBy { it.ts }) {
+            if (r.kind == "wifi") {
+                alias.getOrPut(r.ssid ?: "wifi-unknown") { "Wi-Fi " + ('A' + alias.size) }
             }
+        }
+        return alias
+    }
+
+    /** 네트워크 변경 기록으로 체류를 만든다. */
+    private fun places(
+        changes: List<com.routineai.data.NetworkChangeRow>,
+        alias: Map<String, String>,
+        now: Long,
+    ): List<PlaceStat> {
+        if (changes.isEmpty()) return emptyList()
+        fun aliasOf(r: com.routineai.data.NetworkChangeRow): String = when (r.kind) {
+            "wifi" -> alias[r.ssid ?: "wifi-unknown"] ?: "Wi-Fi"
             "cellular" -> "모바일"
             else -> "연결 없음"
         }

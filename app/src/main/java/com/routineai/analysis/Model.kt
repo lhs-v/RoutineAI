@@ -16,6 +16,8 @@ data class Report(
     val apps: List<AppStat>,
     val sleep: List<SleepStat>,
     val transitions: List<TransitionStat>,
+    val eventChains: List<ChainStat>,
+    val appContext: List<AppContextStat>,
     val coUse: List<CoUseStat>,
     val firstApps: List<CountStat>,
     val notifByApp: List<CountStat>,
@@ -150,6 +152,49 @@ data class SleepStat(
     val startMinuteOfDay: Int,
     val endMinuteOfDay: Int,
     val hours: Double,
+)
+
+/**
+ * 비앱 이벤트(트리거 후보) → 앱 실행(행동) 연쇄.
+ *
+ * 루틴의 형태가 정확히 "조건 발생 → 행동"이므로 이 방향만 집계한다.
+ * 앱→앱 이동은 [Report.transitions] 가 따로 있다.
+ * 반복 횟수가 많고 간격이 짧고 여러 날에 걸칠수록 자동화 가치가 높지만,
+ * 맥락상 말이 되는지는 해석하는 쪽이 판단한다.
+ */
+@Serializable
+data class ChainStat(
+    /** 트리거: "BT연결:Buds3" | "Wi-Fi 연결:Wi-Fi A" | "모바일 전환" | "운동 시작:걷기" */
+    val trigger: String,
+    /** 행동: 앱 표시 이름 */
+    val app: String,
+    val count: Int,
+    val minGapSeconds: Int,
+    val medianGapSeconds: Int,
+    val maxGapSeconds: Int,
+    val distinctDays: Int,
+)
+
+/**
+ * 앱 실행 순간의 상태 맥락 프로파일.
+ *
+ * "이 앱은 어떤 상황에서 열리는가"에 답한다 — 이동통신 중(밖), BT 기기 연결 중,
+ * 알림이 직전에 온 뒤(알림 주도), 몰리는 시간대. 여기서 출퇴근·운동 같은
+ * 직접 관측 불가한 상태를 해석하는 쪽이 유추한다.
+ */
+@Serializable
+data class AppContextStat(
+    val label: String,
+    val launches: Int,
+    /** 실행 순간 이동통신 상태였던 비율 0~100 (네트워크 기록 없으면 -1) */
+    val cellularPct: Double,
+    /** 실행 순간 BT 기기가 연결돼 있던 비율 0~100 (BT 기록 없으면 -1) */
+    val btConnectedPct: Double,
+    val btTopDevice: String?,
+    /** 실행 30초 안에 같은 앱 알림이 선행한 비율 0~100 — 알림 주도성 */
+    val notifLedPct: Double,
+    /** 실행이 몰린 시간대 상위 3 */
+    val topHours: List<Int>,
 )
 
 /** 홈 화면과 동시 실행을 걷어낸 순수 앱→앱 이동 */

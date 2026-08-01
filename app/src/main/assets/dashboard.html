@@ -260,6 +260,34 @@ window.renderReport=function(D){
   else if($("c_lst")) $("c_lst").innerHTML='<p class="empty">관측되지 않았습니다.</p>';
   hbar($("c_cnt"),D.sessionAppCount.map(x=>({k:x.key,v:x.count,t:x.count+"회"})),cs("--s1"),70);
 
+  /* 이벤트 → 행동 연쇄. 루틴의 형태(조건→행동) 그대로라 자동화 후보의 원천이다. */
+  if((D.eventChains||[]).length){
+    add(`<h2>이벤트 → 행동 연쇄</h2><div class="card"><figure><div id="c_ch"></div>
+      <figcaption>비앱 이벤트(트리거) 직후 5분 안에 연 앱. 반복이 많고 간격이 짧고
+      여러 날에 걸칠수록 자동화 후보입니다. 오른쪽은 횟수 · 중앙 간격 · 반복일.</figcaption>
+    </figure></div>`);
+    hbar($("c_ch"),D.eventChains.slice(0,10).map(c=>({
+      k:c.trigger+" → "+c.app,v:c.count,
+      t:c.count+"회 · "+c.medianGapSeconds+"초 · "+c.distinctDays+"일"})),cs("--s3"),210,560);
+  }
+
+  /* 앱의 상태 맥락 */
+  if((D.appContext||[]).length){
+    add(`<h2>앱을 여는 순간의 상태</h2><div class="card"><div class="scroll">
+      <table><thead><tr><th>앱</th><th>실행</th><th>모바일 중</th><th>BT 연결 중</th>
+      <th>알림 주도</th><th>몰리는 시간</th></tr></thead><tbody>${
+      D.appContext.map(a=>`<tr><td>${a.label}</td><td>${a.launches}회</td>
+        <td>${a.cellularPct<0?"—":Math.round(a.cellularPct)+"%"}</td>
+        <td>${a.btConnectedPct<0?"—":Math.round(a.btConnectedPct)+"%"+
+          (a.btTopDevice?" ("+a.btTopDevice+")":"")}</td>
+        <td>${Math.round(a.notifLedPct)}%</td>
+        <td>${a.topHours.map(h=>String(h).padStart(2,"0")+"시").join(" · ")}</td></tr>`).join("")
+      }</tbody></table></div>
+      <p class="empty">모바일 중 = 실행 순간 이동통신(대개 밖). 알림 주도 = 실행 30초 안에
+      같은 앱 알림이 선행. 여기서 출퇴근·이동 같은 직접 안 보이는 상태를 유추합니다.</p>
+    </div>`);
+  }
+
   /* 시각 고정성 */
   if(D.timeFixed.length){
     add(`<h2>시각이 고정된 앱 실행</h2><div class="card"><figure><div id="c_fix"></div>
