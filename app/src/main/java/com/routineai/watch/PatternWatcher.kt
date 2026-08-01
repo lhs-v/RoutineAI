@@ -23,8 +23,14 @@ object PatternWatcher {
 
     private const val TAG = "PatternWatcher"
 
-    /** 같은 제안을 이 간격 안에 다시 띄우지 않는다 (연타 방지용 최소 간격) */
+    /** 아직 결정 안 된 후보를 다시 띄우기까지의 최소 간격 */
     const val RESURFACE_MS = 20L * 60 * 1000
+
+    /**
+     * 수락된 루틴의 연타 방지 간격. 짧게 두는 이유는 이게 방해가 아니라
+     * 요청 이행이기 때문이다 — 앱을 나갔다 다시 들어오면 또 필요하다.
+     */
+    const val ACCEPTED_MIN_GAP_MS = 60L * 1000
 
     /** 하루 방해 예산. 좋은 제안이라도 이만큼 넘으면 제안 탭에 조용히 쌓인다. */
     const val DAILY_BUDGET = 3
@@ -137,12 +143,24 @@ object PatternWatcher {
         return rejects.count { DecisionContext.bucket(it) == hereBucket } >= BUCKET_REJECT_LIMIT
     }
 
-    /** 방해 예산 + 연타 방지 */
+    /**
+     * 방해 예산 + 연타 방지.
+     *
+     * 수락된 루틴은 예산에서 뺀다 — 사용자가 이미 "이렇게 해달라"고 한 것이라
+     * 방해가 아니라 요청 이행이다. 여기에 예산을 매기면 정작 원하는 순간에
+     * 안 뜬다. 연타 방지(짧은 간격)만 최소로 남긴다.
+     */
     private suspend fun canSurface(ctx: Context, p: ProposalRow, now: Long): Boolean {
-        if (now - (p.lastSurfacedAt ?: 0L) < RESURFACE_MS) return false
+        val accepted = p.state == "accepted"
+        val minGap = if (accepted) ACCEPTED_MIN_GAP_MS else RESURFACE_MS
+        if (now - (p.lastSurfacedAt ?: 0L) < minGap) return false
+        if (accepted) return true
+
         val dao = Db.get(ctx).dao()
         val since = now - 24L * 60 * 60 * 1000
-        val today = dao.proposals().filter { (it.lastSurfacedAt ?: 0L) > since }
+        val today = dao.proposals().filter {
+            it.state != "accepted" && (it.lastSurfacedAt ?: 0L) > since
+        }
         if (today.size >= DAILY_BUDGET) {
             Log.i(TAG, "방해 예산 소진 — ${p.oneLine} 은 제안 탭에만 쌓는다")
             return false

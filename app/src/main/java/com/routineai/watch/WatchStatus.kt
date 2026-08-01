@@ -62,9 +62,15 @@ object WatchStatus {
 
         // 제안별로 왜 대기 중인지
         for (p in proposals.filter { it.state !in setOf("dismissed") }.take(6)) {
+            val gap = if (p.state == "accepted") PatternWatcher.ACCEPTED_MIN_GAP_MS
+            else PatternWatcher.RESURFACE_MS
             val cool = p.lastSurfacedAt?.let { last ->
-                val remain = PatternWatcher.RESURFACE_MS - (now - last)
-                if (remain > 0) "${remain / 60_000}분 뒤" else null
+                val remain = gap - (now - last)
+                when {
+                    remain <= 0 -> null
+                    remain < 60_000 -> "${remain / 1000}초 뒤"
+                    else -> "${remain / 60_000}분 뒤"
+                }
             }
             val rejects = dao.decisions(p.signature)
                 .filter { it.kind == "not_now" || it.kind == "dismissed" }

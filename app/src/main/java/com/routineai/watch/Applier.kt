@@ -81,10 +81,6 @@ object Applier {
         val base = anchor ?: pkgs[0]
         if (intentFor(ctx, other) == null) return Result(false, "$other 를 찾을 수 없습니다", false)
 
-        if (!PatternAccessibilityService.isConnected()) {
-            return Result(false, "분할화면에는 접근성 권한이 필요합니다", real = false)
-        }
-
         return runCatching {
             // 앵커가 없으면(제안 탭에서 누른 경우) 기준 앱부터 띄운다.
             if (anchor == null) {
@@ -93,10 +89,14 @@ object Applier {
                 }
                 Thread.sleep(SPLIT_STEP_MS)
             }
-            if (!PatternAccessibilityService.toggleSplitScreen()) {
-                return@runCatching Result(false, "분할화면 전환에 실패했습니다", real = false)
-            }
-            Thread.sleep(SPLIT_STEP_MS)
+
+            // 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
+            // 없으면 인접 실행만 시도한다 — 단일 화면에서는 순차 실행으로
+            // 보이지만, 아무것도 안 되는 것보다는 두 앱을 다 여는 편이 낫다.
+            val split = PatternAccessibilityService.isConnected() &&
+                PatternAccessibilityService.toggleSplitScreen()
+            if (split) Thread.sleep(SPLIT_STEP_MS)
+
             ctx.startActivity(
                 intentFor(ctx, other)!!.addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -104,7 +104,15 @@ object Applier {
                         Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
                 )
             )
-            Result(true, "두 앱을 분할화면으로 열었습니다", real = true)
+            if (split) {
+                Result(true, "두 앱을 분할화면으로 열었습니다", real = true)
+            } else {
+                Result(
+                    true,
+                    "두 앱을 열었습니다. 분할화면으로 나누려면 설정에서 접근성을 켜주세요",
+                    real = true,
+                )
+            }
         }.getOrElse { Result(false, "분할화면 실행 실패: ${it.message}", real = false) }
     }
 

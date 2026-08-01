@@ -624,6 +624,18 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            // 앱페어가 있는데 접근성이 꺼져 있으면 순차 실행으로 떨어진다.
+            // 실패로 보이기 쉬우므로 미리 알린다.
+            if (proposals.any { it.actionType == "app_pair" } && !Applier.hasAccessibility(ctx)) {
+                Notice(
+                    WARN,
+                    "접근성이 꺼져 있어 앱페어가 분할화면으로 갈라지지 않고 순차 실행됩니다. " +
+                        "설정 탭에서 켜주세요."
+                ) {
+                    OutlinedButton(onClick = onGoSettings) { Text("설정 탭으로") }
+                }
+            }
+
             if (watching.isNotEmpty()) {
                 Section("감시 중 ${watching.size}", "패턴이 실시간으로 감지되면 제안됩니다.")
                 watching.forEach { p ->
