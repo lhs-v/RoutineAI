@@ -44,7 +44,11 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         // 그래서 데모에서는 데이터 자체의 마지막 시각을 기준으로 삼는다.
         val now = if (demo) dao.lastEventTs() ?: System.currentTimeMillis()
         else System.currentTimeMillis()
-        val from = now - days.toLong() * 24 * 60 * 60 * 1000
+        // 관측 창의 시작을 사용 이벤트의 시작에 맞춘다. 통신량·헬스는 몇 달을
+        // 소급하지만 사용 이벤트는 며칠뿐이라, 그대로 두면 지표마다 관측 창이
+        // 달라진다. 오래 쓴 기기에서는 요청한 창(days)이 그대로 유지된다.
+        val requested = now - days.toLong() * 24 * 60 * 60 * 1000
+        val from = maxOf(requested, dao.firstEventTs() ?: requested)
 
         val raw = dao.events(from, now)
         val notifs = dao.notifs(from, now)

@@ -208,8 +208,9 @@ def backfill_bt(adb_path):
     con.commit(); con.close()
     if rows:
         lo = min(r[0] for r in rows.values()); hi = max(r[0] for r in rows.values())
-        print(f"BT 백필: {len(rows)}행 ({kst(lo):%m-%d %H:%M} ~ {kst(hi):%m-%d %H:%M}, "
-              f"기존 {existing}행) — 시스템 버퍼가 짧아 하루 안팎만 남는다")
+        print(f"BT 백필: 새로 {len(fresh)}행 / 덤프에 {len(rows)}행 "
+              f"({kst(lo):%m-%d %H:%M} ~ {kst(hi):%m-%d %H:%M}, 기존 {existing}행) "
+              f"— 시스템 버퍼가 짧아 하루 안팎만 남는다")
     else:
         print("BT 이력 없음")
 
@@ -232,13 +233,17 @@ def trim_to_events(con):
     a = con.execute("DELETE FROM net_bucket WHERE bucketStart < ?", (start,)).rowcount
     b = con.execute("DELETE FROM net_change WHERE ts < ?", (start,)).rowcount
     c = con.execute("DELETE FROM notif_event WHERE ts < ?", (start,)).rowcount
+    # 새로 붙는 소스도 같은 시작점을 지킨다. 특히 Health Connect 는 권한 승인 시
+    # 30일을 소급하므로, 자르지 않으면 사용 이벤트보다 앞선 구간이 데모에 샌다.
+    d = con.execute("DELETE FROM bt_event WHERE ts < ?", (start,)).rowcount
+    e = con.execute("DELETE FROM health_session WHERE tsStart < ?", (start,)).rowcount
     if carry:
         con.execute("INSERT INTO net_change (ts, kind, ssid) VALUES (?,?,?)",
                     (start, carry[0], carry[1]))
     con.commit()
     con.execute("VACUUM")
     print(f"시작점 통일: {kst(start):%m-%d %H:%M} 이전 제거 "
-          f"(net_bucket {a}, net_change {b}, notif {c}행)")
+          f"(net_bucket {a}, net_change {b}, notif {c}, bt {d}, health {e}행)")
 
 
 def verify(con):
