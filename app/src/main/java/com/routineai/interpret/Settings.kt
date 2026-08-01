@@ -35,9 +35,22 @@ class Settings(ctx: Context) {
         get() = sp.getString(K_DEPLOYMENT, "").orEmpty()
         set(v) = sp.edit().putString(K_DEPLOYMENT, v).apply()
 
-    var lastInterpretation: String
-        get() = sp.getString("last_interp", "").orEmpty()
-        set(v) = sp.edit().putString("last_interp", v).apply()
+    /**
+     * 자동 분석. 켜면 수집 워커 완료 후 하루 1회 백그라운드로 제안을 갱신한다.
+     * 기본 꺼짐 — API 비용이 드는 동작이라 사용자가 명시적으로 켜야 한다.
+     */
+    var autoAnalyze: Boolean
+        get() = sp.getBoolean("auto_analyze", false)
+        set(v) = sp.edit().putBoolean("auto_analyze", v).apply()
+
+    var lastAnalysisAt: Long
+        get() = sp.getLong("last_analysis_at", 0L)
+        set(v) = sp.edit().putLong("last_analysis_at", v).apply()
+
+    /** 마지막 분석의 analysisNote + rejected(JSON). 제안 탭 하단에 접혀 보인다. */
+    var lastAnalysisNote: String
+        get() = sp.getString("last_analysis_note", "").orEmpty()
+        set(v) = sp.edit().putString("last_analysis_note", v).apply()
 
     /**
      * 마지막으로 만든 리포트 JSON.

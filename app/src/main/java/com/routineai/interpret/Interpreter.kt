@@ -71,10 +71,15 @@ class Interpreter(private val ctx: Context) {
     }
 
     /**
+     * 리포트를 보내 루틴 제안 JSON(원문 문자열)을 받아온다.
+     *
+     * 파싱·검증·병합은 [ProposalEngine] 의 몫이다 — 여기는 전송과
+     * "JSON 만 내놓게 만들기"까지만 책임진다. 첫 응답이 JSON 으로 파싱되지
+     * 않으면 한 번만 교정 요청을 붙여 재시도한다.
+     *
      * @param reportJson [com.routineai.analysis.Report] 를 직렬화한 문자열
-     * @return 마크다운 해석문
      */
-    fun interpret(reportJson: String, cfg: AzureConfig): Result<String> {
+    fun propose(reportJson: String, cfg: AzureConfig): Result<String> {
         val missing = cfg.missing
         if (missing.isNotEmpty()) {
             return Result.failure(
@@ -83,20 +88,59 @@ class Interpreter(private val ctx: Context) {
         }
 
         val system = skillPrompt()
-        val user = userPrompt(reportJson)
 
         return runCatching {
-            var last: Reply? = null
-            for ((i, v) in VARIANTS.withIndex()) {
-                val r = send(cfg, system, user, v)
-                if (r.ok) return@runCatching r.textOrThrow()
-                last = r
-                // 배포가 그 파라미터를 안 받는다고 답한 경우에만 다음 조합을 시도한다.
-                // 그 외의 400 은 진짜 오류이므로 그대로 올려서 원인을 감추지 않는다.
-                if (i == VARIANTS.lastIndex || r.code != 400 || !r.isParamMismatch) break
+            var text = call(cfg, system, userPrompt(reportJson))
+            if (extractJson(text) == null) {
+                text = call(
+                    cfg, system,
+                    userPrompt(reportJson) +
+                        "\n\n주의: 직전 응답이 JSON 파싱에 실패했습니다. " +
+                        "설명 없이, 코드펜스 없이, 순수 JSON 객체 하나만 출력하세요."
+                )
             }
-            last!!.textOrThrow()
+            extractJson(text)
+                ?: error("응답에서 JSON 을 찾지 못했습니다: ${text.take(300)}")
         }
+    }
+
+    private fun call(cfg: AzureConfig, system: String, user: String): String {
+        var last: Reply? = null
+        for ((i, v) in VARIANTS.withIndex()) {
+            val r = send(cfg, system, user, v)
+            if (r.ok) return r.textOrThrow()
+            last = r
+            // 배포가 그 파라미터를 안 받는다고 답한 경우에만 다음 조합을 시도한다.
+            // 그 외의 400 은 진짜 오류이므로 그대로 올려서 원인을 감추지 않는다.
+            if (i == VARIANTS.lastIndex || r.code != 400 || !r.isParamMismatch) break
+        }
+        return last!!.textOrThrow()
+    }
+
+    /** 코드펜스·앞뒤 설명이 섞여도 첫 '{'부터 짝이 맞는 '}'까지를 꺼낸다. */
+    private fun extractJson(text: String): String? {
+        val start = text.indexOf('{')
+        if (start < 0) return null
+        var depth = 0
+        var inStr = false
+        var esc = false
+        for (i in start until text.length) {
+            val c = text[i]
+            when {
+                esc -> esc = false
+                inStr -> when (c) {
+                    '\\' -> esc = true
+                    '"' -> inStr = false
+                }
+                c == '"' -> inStr = true
+                c == '{' -> depth++
+                c == '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
+                }
+            }
+        }
+        return null
     }
 
     // ------------------------------------------------------------------
@@ -188,37 +232,17 @@ class Interpreter(private val ctx: Context) {
 
     private fun userPrompt(reportJson: String): String = buildString {
         appendLine("아래는 한 사용자의 스마트폰 사용 로그를 집계한 리포트입니다.")
-        appendLine("시스템 프롬프트의 절차를 그대로 따라 해석해 주세요.")
+        appendLine("시스템 프롬프트의 절차(지형도 → 품질 → 후보 발굴 → 맥락 판정 →")
+        appendLine("교차 검증 → 제안 생성)를 그대로 따라 루틴 제안을 만드세요.")
         appendLine()
-        appendLine("특히 지켜야 할 것:")
-        appendLine("- meta.fullDays 와 meta.partialDays 를 먼저 확인하고, 모든 평균은 fullDays 기준임을 전제하세요.")
-        appendLine("- quality 객체에 데이터 품질 정보가 있습니다. warnings 를 반드시 반영하세요.")
-        appendLine("- quality.reconciliationDelta 가 음수면 집계 오류이므로 그 사실을 먼저 알리세요.")
-        appendLine("- 관측일수가 적은 지표는 결론 등급을 낮추세요.")
-        appendLine("- 장소는 'Wi-Fi A' 같은 별칭으로만 주어집니다. 실제 장소를 추정하지 마세요.")
-        appendLine("- coUse 는 전환이 아니라 분할화면 동시 사용입니다. 혼동하지 마세요.")
-        appendLine("- netApps 는 통신량이지 사용 시간이 아닙니다. 화면이 꺼진 동안의 백그라운드")
-        appendLine("  트래픽이 섞여 있으므로, 모바일 비율은 '밖에서 쓰는 앱'의 신호로만 쓰세요.")
-        appendLine("- eventChains 는 자동화 후보의 원천입니다(트리거→행동이 루틴의 형태 그대로).")
-        appendLine("  반복 많고 간격 짧고 여러 날이면 후보지만, 맥락상 말이 되는지는 당신이 판단하세요.")
-        appendLine("- appContext 로 직접 안 보이는 상태(출퇴근·이동·운동 중)를 유추할 수 있습니다.")
-        appendLine("  단 유추라는 사실을 결론까지 끌고 가세요.")
-        appendLine("- 알림의 앱별 집계는 두 개입니다. notifByApp 은 리스너 도착 기준(권한을 켠 뒤부터,")
-        appendLine("  미디어 재생 갱신이 섞여 부풀 수 있음), notifByAppInterrupt 는 시스템 알림 이벤트")
-        appendLine("  기준(며칠 소급, 더 보수적)입니다. 앱 이름을 보고 정기·시스템성 알림과 사람이")
-        appendLine("  응답해야 하는 알림을 구분해 해석하세요. 건수 자체보다 그 구분이 중요합니다.")
+        appendLine("기억할 것:")
+        appendLine("- 통계가 문을 열고 서사가 통과시킵니다. 서사가 안 써지면 rejected 로.")
+        appendLine("- 개수를 채우지 마세요. 확실한 것만, 전체 최대 5개, 카테고리당 최대 2개.")
+        appendLine("- 트리거·액션·삼성 루틴 ID 는 proposal-rules.md 의 허용 목록만 쓰세요.")
+        appendLine("- evidence 는 리포트의 필드명·수치를 그대로 인용하세요.")
         appendLine()
-        appendLine("출력 형식: 마크다운. 순서는")
-        appendLine("1) 데이터 범위 한 문단")
-        // SKILL.md 1단계는 이 표를 "안 만들면 문제가 반드시 생긴다"고 못박는데
-        // 출력에 없으면 실제로 그렸는지 확인할 수 없다. 산출물로 요구해 밖으로 꺼낸다.
-        appendLine("2) 데이터 지형도 표 — SKILL.md 1단계의 표를 채우세요.")
-        appendLine("   열: 지표 | 관측 창 | 해상도 | 표본 수 | 신뢰 계층")
-        appendLine("   화면·앱·알림·수면·외출·장소를 빠짐없이 넣고, 관측 창이 서로 다르면")
-        appendLine("   그 사실이 표에서 바로 보이게 하세요.")
-        appendLine("3) 발견 — 등급 순, 각각 주장/근거/판정 근거/한계")
-        appendLine("4) 자동화 제안 — 우선순위 순, 안드로이드에서 실제로 설정 가능한 것만")
-        appendLine("5) 이번에 확인할 수 없었던 것")
+        appendLine("출력: proposal-rules.md 의 JSON 스키마 그대로, 설명도 코드펜스도 없이")
+        appendLine("순수 JSON 객체 하나만 출력하세요.")
         appendLine()
         appendLine("리포트:")
         appendLine("```json")
@@ -253,8 +277,8 @@ class Interpreter(private val ctx: Context) {
             "SKILL.md",
             "references/artifacts.md",
             "references/metrics.md",
+            "references/proposal-rules.md",
             "references/cross-analysis.md",
-            "references/output-rules.md",
             "references/worked-example.md",
         )
     }

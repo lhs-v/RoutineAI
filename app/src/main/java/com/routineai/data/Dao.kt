@@ -68,6 +68,24 @@ interface UsageDao {
     @Query("SELECT * FROM health_session WHERE tsStart >= :from AND tsStart < :to ORDER BY tsStart ASC")
     suspend fun healthSessions(from: Long, to: Long): List<HealthSessionRow>
 
+    @Query("SELECT * FROM proposal ORDER BY updatedAt DESC")
+    suspend fun proposals(): List<ProposalRow>
+
+    @Query("SELECT * FROM proposal WHERE signature = :sig")
+    suspend fun proposal(sig: String): ProposalRow?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertProposal(row: ProposalRow)
+
+    @Query("UPDATE proposal SET state = :state, updatedAt = :at WHERE signature = :sig")
+    suspend fun setProposalState(sig: String, state: String, at: Long)
+
+    @Insert
+    suspend fun logProposalEvent(row: ProposalEventRow)
+
+    @Query("SELECT * FROM proposal_event WHERE proposalSignature = :sig ORDER BY ts ASC")
+    suspend fun proposalEvents(sig: String): List<ProposalEventRow>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(row: KvRow)
 

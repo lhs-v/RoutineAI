@@ -62,8 +62,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.routineai.analysis.Analyzer
 import com.routineai.analysis.Report
+import androidx.compose.foundation.clickable
 import androidx.health.connect.client.PermissionController
 import com.routineai.collect.HealthCollector
+import com.routineai.data.ProposalRow
+import com.routineai.interpret.ProposalEngine
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
@@ -82,6 +85,14 @@ import java.util.Locale
 private val OK = Color(0xFF0CA30C)
 private val NEED = Color(0xFFD03B3B)
 private val WARN = Color(0xFFEDA100)
+
+private val CATEGORY_LABELS = mapOf(
+    "trigger_routine" to "자동 실행",
+    "app_pair" to "앱페어",
+    "app_mode" to "앱 모드",
+    "notif_cleanup" to "알림 정리",
+    "time_shortcut" to "시간 습관",
+)
 
 /**
  * 화면 구성.
@@ -172,8 +183,8 @@ class MainActivity : ComponentActivity() {
         var reportJson by remember { mutableStateOf(prefs.lastReport.ifBlank { null }) }
         var reportAt by remember { mutableStateOf(prefs.lastReportAt) }
         var reportMsg by remember { mutableStateOf("") }
-        var interpretation by remember { mutableStateOf(prefs.lastInterpretation) }
         var azure by remember { mutableStateOf(prefs.azureConfig()) }
+        var proposalsTick by remember { mutableIntStateOf(0) }
         // 에셋이 없는 빌드(저장소를 클론해서 빌드한 경우)에서는 데모를 켤 수 없다.
         // 이전에 켜둔 상태로 저장돼 있어도 여기서 내려야 첫 질의에서 안 터진다.
         val demoAvailable = remember { Db.hasDemoAsset(ctx) }
@@ -184,7 +195,7 @@ class MainActivity : ComponentActivity() {
                 StatusHeader(status, usageOk, demo)
 
                 TabRow(selectedTabIndex = tab) {
-                    listOf("대시보드", "해석", "설정").forEachIndexed { i, t ->
+                    listOf("대시보드", "제안", "설정").forEachIndexed { i, t ->
                         Tab(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -250,20 +261,35 @@ class MainActivity : ComponentActivity() {
                             },
                         )
 
-                        1 -> InterpretTab(
-                            busy = busy, hasReport = reportJson != null,
-                            azure = azure, interpretation = interpretation,
+                        1 -> ProposalsTab(
+                            busy = busy, azure = azure, prefs = prefs,
+                            refreshTick = proposalsTick,
                             onGoSettings = { tab = 2 },
-                            onInterpret = {
-                                busy = true; step = "해석 요청 중 (최대 2분)"
+                            onChanged = { proposalsTick++ },
+                            onAnalyze = {
+                                busy = true; step = "분석 시작"
                                 lifecycleScope.launch {
-                                    val rj = reportJson
-                                    if (rj == null) { busy = false; step = ""; return@launch }
-                                    val res = withContext(Dispatchers.IO) {
-                                        Interpreter(ctx).interpret(rj, azure)
+                                    val res = withContext(Dispatchers.Default) {
+                                        ProposalEngine(ctx).analyze(azure, demo) { s ->
+                                            lifecycleScope.launch { step = s }
+                                        }
                                     }
-                                    interpretation = res.getOrElse { "해석 실패: ${it.message}" }
-                                    prefs.lastInterpretation = interpretation
+                                    res.onSuccess { o ->
+                                        prefs.lastAnalysisAt = System.currentTimeMillis()
+                                        prefs.lastAnalysisNote = ProposalEngine.encodeNote(
+                                            ProposalEngine.StoredNote(
+                                                o.analysisNote, o.rejected, prefs.lastAnalysisAt
+                                            )
+                                        )
+                                    }.onFailure { e ->
+                                        prefs.lastAnalysisNote = ProposalEngine.encodeNote(
+                                            ProposalEngine.StoredNote(
+                                                "분석 실패: ${e.message}", emptyList(),
+                                                System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    proposalsTick++
                                     busy = false; step = ""
                                 }
                             },
@@ -271,7 +297,7 @@ class MainActivity : ComponentActivity() {
 
                         else -> SettingsTab(
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
-                            btOk = btOk, healthOk = healthOk,
+                            btOk = btOk, healthOk = healthOk, prefs = prefs,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -501,40 +527,165 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------
 
+    /**
+     * 제안 탭 — 루틴 제안의 수명주기를 보여주는 화면.
+     *
+     * [감시 중] 카드에서 바로 수락·거절할 수 있다(P2 의 실시간 팝업이 생기면
+     * 그쪽이 주 경로가 되고 여기는 목록·이력 뷰가 된다). 분석 버튼은 데모
+     * 시연용이자 디버그용 — 평상시 갱신은 자동 분석(설정 탭 토글)이 맡는다.
+     */
     @Composable
-    private fun InterpretTab(
-        busy: Boolean, hasReport: Boolean, azure: AzureConfig,
-        interpretation: String, onInterpret: () -> Unit, onGoSettings: () -> Unit,
+    private fun ProposalsTab(
+        busy: Boolean, azure: AzureConfig, prefs: Settings, refreshTick: Int,
+        onAnalyze: () -> Unit, onChanged: () -> Unit, onGoSettings: () -> Unit,
     ) {
+        val ctx = LocalContext.current
+        var proposals by remember { mutableStateOf<List<ProposalRow>>(emptyList()) }
+        LaunchedEffect(refreshTick) {
+            proposals = withContext(Dispatchers.IO) { Db.get(ctx).dao().proposals() }
+        }
+        val note = remember(refreshTick) { ProposalEngine.decodeNote(prefs.lastAnalysisNote) }
+
+        fun decide(p: ProposalRow, state: String, eventKind: String) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                val dao = Db.get(ctx).dao()
+                dao.setProposalState(p.signature, state, now)
+                dao.logProposalEvent(
+                    com.routineai.data.ProposalEventRow(
+                        ts = now, proposalSignature = p.signature, kind = eventKind
+                    )
+                )
+                withContext(Dispatchers.Main) { onChanged() }
+            }
+        }
+
         Column(
             Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                "집계 수치만 Azure OpenAI 로 전송합니다. " +
-                    "원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-
-            if (!hasReport) {
-                Notice(WARN, "먼저 대시보드 탭에서 리포트를 생성해 주세요.")
-            }
             if (!azure.isComplete) {
-                Notice(WARN, "해석 연결이 설정되지 않았습니다: ${azure.missing.joinToString(", ")}") {
+                Notice(WARN, "분석 연결이 설정되지 않았습니다: ${azure.missing.joinToString(", ")}") {
                     OutlinedButton(onClick = onGoSettings) { Text("설정 탭으로") }
                 }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled = azure.isComplete && !busy, onClick = onAnalyze) {
+                    Text(if (proposals.isEmpty()) "패턴 분석" else "다시 분석")
+                }
+                Spacer(Modifier.size(10.dp))
+                if (prefs.lastAnalysisAt > 0L) {
+                    Text(
+                        "마지막 분석 ${fmt(prefs.lastAnalysisAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                "집계 수치만 전송합니다. 원본 이벤트·알림 본문·Wi-Fi 실제 이름은 보내지 않습니다.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-            Button(
-                enabled = hasReport && azure.isComplete && !busy,
-                onClick = onInterpret,
-            ) { Text(if (interpretation.isBlank()) "해석 요청" else "다시 해석") }
+            val watching = proposals.filter { it.state in setOf("candidate", "snoozed", "dormant") }
+            val accepted = proposals.filter { it.state == "accepted" }
+            val dismissed = proposals.filter { it.state == "dismissed" }
 
-            if (interpretation.isNotBlank()) {
+            if (proposals.isEmpty() && !busy) {
+                Text(
+                    "아직 제안이 없습니다. 분석을 실행하면 사용 패턴에서 루틴 후보를 찾습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (watching.isNotEmpty()) {
+                Section("감시 중 ${watching.size}", "패턴이 실시간으로 감지되면 제안됩니다.")
+                watching.forEach { p ->
+                    ProposalCard(p,
+                        primary = "수락" to { decide(p, "accepted", "accepted") },
+                        secondary = "보지 않기" to { decide(p, "dismissed", "dismissed") })
+                }
+            }
+            if (accepted.isNotEmpty()) {
+                Section("수락됨 ${accepted.size}", "심층 분석과 고도화 제안의 대상이 됩니다.")
+                accepted.forEach { p -> ProposalCard(p) }
+            }
+            if (dismissed.isNotEmpty()) {
+                Section("보지 않기로 함 ${dismissed.size}", "다시 제안되지 않습니다.")
+                dismissed.forEach { p -> ProposalCard(p, dimmed = true) }
+            }
+
+            if (note.analysisNote.isNotBlank() || note.rejected.isNotEmpty()) {
                 HorizontalDivider()
-                Text(interpretation, style = MaterialTheme.typography.bodySmall)
+                var open by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { open = !open }) {
+                    Text(if (open) "분석 노트 접기" else "분석 노트 · 제안하지 않은 것 보기")
+                }
+                if (open) {
+                    if (note.analysisNote.isNotBlank()) {
+                        Text(note.analysisNote, style = MaterialTheme.typography.bodySmall)
+                    }
+                    note.rejected.forEach { r ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(r.candidate, fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodySmall)
+                                Text(r.reason, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
             }
             Spacer(Modifier.height(40.dp))
+        }
+    }
+
+    @Composable
+    private fun ProposalCard(
+        p: ProposalRow,
+        primary: Pair<String, () -> Unit>? = null,
+        secondary: Pair<String, () -> Unit>? = null,
+        dimmed: Boolean = false,
+    ) {
+        val evidence = remember(p.evidenceJson) {
+            runCatching { Json.decodeFromString<List<String>>(p.evidenceJson) }
+                .getOrDefault(emptyList())
+        }
+        var expanded by remember { mutableStateOf(false) }
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(14.dp).let { if (dimmed) it else it },
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Chip(CATEGORY_LABELS[p.category] ?: p.category)
+                    Spacer(Modifier.size(6.dp))
+                    Chip(p.confidence, if (p.confidence == "확인됨") OK else WARN)
+                }
+                Text(p.oneLine, fontWeight = FontWeight.SemiBold)
+                Text(p.narrative, style = MaterialTheme.typography.bodySmall)
+                if (evidence.isNotEmpty()) {
+                    Text(
+                        if (expanded) evidence.joinToString("\n") { "· $it" }
+                        else "근거 ${evidence.size}개 보기",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clickable { expanded = !expanded },
+                    )
+                }
+                if (primary != null || secondary != null) {
+                    Row {
+                        primary?.let { (label, act) ->
+                            Button(onClick = act) { Text(label) }
+                        }
+                        Spacer(Modifier.size(8.dp))
+                        secondary?.let { (label, act) ->
+                            OutlinedButton(onClick = act) { Text(label) }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -549,7 +700,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SettingsTab(
         usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
-        btOk: Boolean, healthOk: Boolean, busy: Boolean,
+        btOk: Boolean, healthOk: Boolean, busy: Boolean, prefs: Settings,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
         onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
@@ -701,12 +852,29 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
             )
 
-            // ---- 3. 해석 연결 ----
+            // ---- 3. 분석 연결 ----
             Section(
-                "3. 해석 연결 (선택)",
-                "비워두면 앱은 완전히 오프라인으로 동작합니다. 채우면 해석 탭에서 " +
-                    "집계 결과를 Azure OpenAI 에 보내 해석을 받을 수 있습니다.",
+                "3. 분석 연결 (선택)",
+                "비워두면 앱은 완전히 오프라인으로 동작합니다. 채우면 제안 탭에서 " +
+                    "집계 결과를 Azure OpenAI 에 보내 루틴 제안을 받을 수 있습니다.",
             )
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("자동 분석", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "켜면 백그라운드 수집 후 하루 1회 제안을 자동 갱신합니다. " +
+                                "API 호출 비용이 들어 기본은 꺼짐입니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.size(10.dp))
+                    var auto by remember { mutableStateOf(prefs.autoAnalyze) }
+                    Switch(checked = auto, onCheckedChange = {
+                        auto = it; prefs.autoAnalyze = it
+                    })
+                }
+            }
             ConfigField(
                 label = "AZURE_OPENAI_ENDPOINT",
                 value = azure.endpoint,

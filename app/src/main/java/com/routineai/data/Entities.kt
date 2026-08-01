@@ -102,6 +102,54 @@ data class HealthSessionRow(
     val kind: String,
 )
 
+/**
+ * LLM 이 만든 루틴 제안의 현재 상태.
+ *
+ * 기본키는 LLM 이 준 id 가 아니라 (트리거, 행동) 시그니처다 — 분석을 다시 돌려
+ * 같은 제안이 또 나오면 증거만 갱신되고 상태(수락·거절)는 유지돼야 한다.
+ *
+ * state: candidate(감시 중) | accepted(수락) | snoozed(이번엔 아님, 쿨다운)
+ *        | dismissed(보지 않기, 재제안 금지) | dormant(반복 무시로 휴면)
+ */
+@Entity(tableName = "proposal")
+data class ProposalRow(
+    @PrimaryKey val signature: String,
+    val category: String,
+    val oneLine: String,
+    /** 왜 이 패턴이 이 목적으로 읽히는가 — 맥락 판정의 한 문장 서사 */
+    val narrative: String,
+    val triggerType: String,
+    val triggerParam: String?,
+    val actionType: String,
+    /** JSON 배열 문자열 */
+    val actionParams: String,
+    val samsungCondition: String?,
+    val samsungAction: String?,
+    /** JSON 배열 문자열 */
+    val evidenceJson: String,
+    val confidence: String,
+    val state: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val surfacedCount: Int = 0,
+    val lastSurfacedAt: Long? = null,
+)
+
+/**
+ * 제안 이력 — append only.
+ *
+ * 상태 컬럼만으로는 "세 번 무시하고 네 번째에 수락" 같은 궤적을 잃는다.
+ * 수락·거절의 궤적이 곧 의도의 ground truth 라 심층 분석(P3)의 입력이 된다.
+ * kind: generated | updated | surfaced | accepted | not_now | dismissed | revived
+ */
+@Entity(tableName = "proposal_event", indices = [Index(value = ["ts"])])
+data class ProposalEventRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: Long,
+    val proposalSignature: String,
+    val kind: String,
+)
+
 /** 마지막 수집 시각 등 내부 상태 */
 @Entity(tableName = "kv")
 data class KvRow(@PrimaryKey val k: String, val v: String)

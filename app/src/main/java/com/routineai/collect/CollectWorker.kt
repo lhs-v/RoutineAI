@@ -45,6 +45,26 @@ class CollectWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
             }
 
             Log.i(TAG, "수집 완료: 이번 ${res.scanned}건, 누적 ${res.totalStored}건")
+
+            // 자동 분석(설정 토글, 기본 꺼짐). 하루 1회, 연결이 설정돼 있을 때만.
+            val prefs = com.routineai.interpret.Settings(applicationContext)
+            val cfg = prefs.azureConfig()
+            if (prefs.autoAnalyze && cfg.isComplete &&
+                now - prefs.lastAnalysisAt > 24L * 60 * 60 * 1000
+            ) {
+                com.routineai.interpret.ProposalEngine(applicationContext)
+                    .analyze(cfg, demo = prefs.demoMode)
+                    .onSuccess { o ->
+                        prefs.lastAnalysisAt = System.currentTimeMillis()
+                        prefs.lastAnalysisNote = com.routineai.interpret.ProposalEngine.encodeNote(
+                            com.routineai.interpret.ProposalEngine.StoredNote(
+                                o.analysisNote, o.rejected, prefs.lastAnalysisAt
+                            )
+                        )
+                        Log.i(TAG, "자동 분석: 신규 ${o.added} · 갱신 ${o.updated}")
+                    }
+                    .onFailure { Log.w(TAG, "자동 분석 실패", it) }
+            }
             Result.success()
         } catch (t: Throwable) {
             Log.e(TAG, "수집 실패", t)

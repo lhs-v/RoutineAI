@@ -8,12 +8,13 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [UsageEventRow::class, NotifEventRow::class, NetBucketRow::class,
-        NetworkChangeRow::class, KvRow::class, BtEventRow::class, HealthSessionRow::class],
-    version = 2,
+        NetworkChangeRow::class, KvRow::class, BtEventRow::class, HealthSessionRow::class,
+        ProposalRow::class, ProposalEventRow::class],
+    version = 3,
     exportSchema = true,
-    // v1 -> v2: bt_event, health_session 테이블 추가만. 기존 테이블은 그대로라
-    // 자동 마이그레이션으로 충분하다. 스냅샷은 app/schemas 에 있다.
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    // 테이블 추가만 있는 버전 업이라 자동 마이그레이션으로 충분하다.
+    // v2: bt_event, health_session / v3: proposal, proposal_event
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
 )
 abstract class Db : RoomDatabase() {
     abstract fun dao(): UsageDao
