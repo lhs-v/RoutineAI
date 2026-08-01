@@ -16,6 +16,7 @@ data class Report(
     val apps: List<AppStat>,
     val sleep: List<SleepStat>,
     val transitions: List<TransitionStat>,
+    val appPairs: List<AppPairStat>,
     val eventChains: List<ChainStat>,
     val appContext: List<AppContextStat>,
     val coUse: List<CoUseStat>,
@@ -211,6 +212,29 @@ data class TransitionStat(
 /** 같은 시각에 함께 떠 있던 조합 = 분할화면 */
 @Serializable
 data class CoUseStat(val a: String, val b: String, val count: Int, val distinctDays: Int)
+
+/**
+ * 앱 페어 후보 — 두 앱의 관계를 한 행으로 본다.
+ *
+ * [Report.transitions] 는 방향별이라 페어 판단에 불편하다. 여기서는 양방향을
+ * 합산하고 분할화면 동시 사용까지 붙인다. 왕복이 잦고 간격이 짧고 홈 경유가
+ * 적을수록, 또 이미 분할화면으로 쓰고 있을수록 "한 세트로 쓰는 앱"이다.
+ */
+@Serializable
+data class AppPairStat(
+    val a: String,
+    val b: String,
+    /** 양방향 전환 합 */
+    val roundTrips: Int,
+    /** a→b 비율 0~100. 50 근처면 왕복, 극단이면 한 방향 흐름 */
+    val abPct: Double,
+    val medianGapSeconds: Int,
+    /** 홈 화면을 거친 비율 0~100. 높을수록 전환 마찰이 크다 */
+    val viaLauncherPct: Double,
+    /** 분할화면 동시 사용 횟수 */
+    val coUseCount: Int,
+    val distinctDays: Int,
+)
 
 @Serializable
 data class CountStat(val key: String, val count: Double)

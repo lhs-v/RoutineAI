@@ -260,6 +260,20 @@ window.renderReport=function(D){
   else if($("c_lst")) $("c_lst").innerHTML='<p class="empty">관측되지 않았습니다.</p>';
   hbar($("c_cnt"),D.sessionAppCount.map(x=>({k:x.key,v:x.count,t:x.count+"회"})),cs("--s1"),70);
 
+  /* 앱 페어 후보 — 양방향 왕복 + 분할화면 결합 */
+  if((D.appPairs||[]).length){
+    add(`<h2>앱 페어 후보</h2><div class="card"><div class="scroll">
+      <table><thead><tr><th>조합</th><th>왕복</th><th>중앙 간격</th><th>홈 경유</th>
+      <th>분할화면</th><th>반복일</th></tr></thead><tbody>${
+      D.appPairs.map(p=>`<tr><td>${p.a} ┃ ${p.b}</td><td>${p.roundTrips}회</td>
+        <td>${p.medianGapSeconds}초</td><td>${Math.round(p.viaLauncherPct)}%</td>
+        <td>${p.coUseCount?p.coUseCount+"회":"—"}</td><td>${p.distinctDays}일</td></tr>`).join("")
+      }</tbody></table></div>
+      <p class="empty">간격이 짧고 홈 경유가 낮고 분할화면 실측이 있을수록 "한 세트로 쓰는
+      앱"입니다. 간격이 수십 초에 홈 경유가 높으면 별개 작업의 병행일 수 있습니다.</p>
+    </div>`);
+  }
+
   /* 이벤트 → 행동 연쇄. 루틴의 형태(조건→행동) 그대로라 자동화 후보의 원천이다. */
   if((D.eventChains||[]).length){
     add(`<h2>이벤트 → 행동 연쇄</h2><div class="card"><figure><div id="c_ch"></div>

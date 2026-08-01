@@ -209,6 +209,38 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             )
         }.sortedByDescending { it.count }.take(20)
 
+        // ---- 앱 페어: 양방향 전환 합산 + 분할화면 결합 ----
+        class PairAcc {
+            val gaps = ArrayList<Long>()
+            var ab = 0; var via = 0
+            val days = HashSet<LocalDate>()
+        }
+        val pairAgg = HashMap<Pair<String, String>, PairAcc>()
+        for ((k, gaps) in trans) {
+            val sorted = if (k.first < k.second) k else k.second to k.first
+            val acc = pairAgg.getOrPut(sorted) { PairAcc() }
+            acc.gaps += gaps
+            if (k == sorted) acc.ab += gaps.size
+            acc.via += transVia[k] ?: 0
+            acc.days += transDays[k] ?: emptySet()
+        }
+        val appPairs = pairAgg.entries
+            .filter { it.value.gaps.size >= 6 }
+            .sortedByDescending { it.value.gaps.size }
+            .take(10)
+            .map { (k, acc) ->
+                val n = acc.gaps.size
+                AppPairStat(
+                    a = label(k.first), b = label(k.second),
+                    roundTrips = n,
+                    abPct = (acc.ab * 100.0 / n).r2(),
+                    medianGapSeconds = acc.gaps.map { it.toDouble() }.median().roundToInt(),
+                    viaLauncherPct = (acc.via * 100.0 / n).r2(),
+                    coUseCount = s.coUse[k]?.size ?: 0,
+                    distinctDays = acc.days.size,
+                )
+            }
+
         val coUse = s.coUse.entries.map { (k, times) ->
             CoUseStat(
                 a = label(k.first), b = label(k.second), count = times.size,
@@ -361,7 +393,8 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 device = android.os.Build.MODEL,
             ),
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
-            transitions = transitions, eventChains = eventChains, appContext = appContext,
+            transitions = transitions, appPairs = appPairs,
+            eventChains = eventChains, appContext = appContext,
             coUse = coUse, firstApps = first,
             notifByApp = notifByApp, notifByAppInterrupt = notifByAppInterrupt,
             lastApps = lastApps, morningFirstApps = morningFirst,
