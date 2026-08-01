@@ -19,6 +19,15 @@ data class Report(
     val coUse: List<CoUseStat>,
     val firstApps: List<CountStat>,
     val notifByApp: List<CountStat>,
+    /**
+     * 발신 앱별 알림 — 시스템 알림 이벤트(usagestats type 12) 기준, 건/일.
+     *
+     * [notifByApp] 과 달리 알림 접근 권한 없이도 수집되고, 시스템이 이벤트를 며칠
+     * 보관하므로 앱 설치 전 구간까지 소급된다. 소리·방해 여부의 분류가 아니라
+     * "어느 앱이 얼마나 보내는가"가 목적이다 — 해석하는 쪽이 앱 이름을 보고
+     * 정기·시스템성 알림과 사람이 응답해야 하는 알림을 구분할 수 있다.
+     */
+    val notifByAppInterrupt: List<CountStat>,
     val sessionAppCount: List<CountStat>,
     val places: List<PlaceStat>,
     val timeFixed: List<TimeFixedStat>,
@@ -81,15 +90,6 @@ data class DayStat(
     val noAppWakes: Int,
     /** 지속 알림(ONGOING)을 뺀 전체 알림 */
     val notifs: Int,
-    /** 그중 채널 중요도가 기본 이상인 것 (소리·헤드업이 날 수 있는 알림) */
-    val notifsInterruptive: Int,
-    /**
-     * 시스템이 '실제로 방해했다'고 기록한 알림.
-     * usagestats 의 NOTIFICATION_INTERRUPTION(type 12) 개수이며,
-     * 소리·진동·헤드업이 실제로 발생했을 때만 남는다.
-     * 기기가 이 이벤트를 앱에 주지 않으면 0 이다.
-     */
-    val notifsSystemInterrupt: Int,
     /**
      * 이 날 알림 리스너가 켜져 있었는가.
      * 리스너는 소급되지 않으므로, 켜기 전 날은 알림이 0 으로 보인다.

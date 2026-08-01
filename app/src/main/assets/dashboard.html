@@ -169,9 +169,9 @@ window.renderReport=function(D){
      n:`평일 ${q.weekdayCount}일 · 주말 ${q.weekendCount}일`},
     {v:Math.round(avg(d=>d.wakes))+"회",l:"하루 화면 켠 횟수",
      n:`30초 미만 ${Math.round(avg(d=>d.microWakes))}회 · 앱 미실행 ${Math.round(avg(d=>d.noAppWakes))}회`},
-    {v:Math.round(navg(d=>d.notifs))+"건",l:"하루 받은 알림 (전체)",
+    {v:Math.round(navg(d=>d.notifs))+"건",l:"하루 받은 알림",
      n:q.notifAccessGranted
-        ? `방해 가능 ${Math.round(navg(d=>d.notifsInterruptive||0))}건 · 실제 방해 ${Math.round(avg(d=>d.notifsSystemInterrupt||0))}건`
+        ? `리스너 도착 기준 · 관측 ${nn}일`
         : "알림 접근이 꺼져 있어 값이 비어 있습니다"},
     {v:D.sleep.length?r1(median(D.sleep.map(s=>s.hours)))+"시간":"—",l:"폰을 놓은 구간 (중앙값)",
      n:`관측 ${D.sleep.length}일`},
@@ -266,34 +266,27 @@ window.renderReport=function(D){
       t:t.daysHit+"/"+t.daysObserved+"일 ("+r1(t.launchesPerDay)+"회/일)"})),cs("--s3"),150,540);
   }
 
-  /* 알림 */
-  if(D.notifByApp.length){
-    const nAll=Math.round(navg(d=>d.notifs)),
-          nInt=Math.round(navg(d=>d.notifsInterruptive||0)),
-          nSys=Math.round(avg(d=>d.notifsSystemInterrupt||0));
+  /* 알림 — 누가 보냈는가가 핵심이다. 앱 이름이 알림의 성격을 말해준다. */
+  if(D.notifByApp.length||(D.notifByAppInterrupt||[]).length){
     const since=dg.notifListenerSince
       ? new Date(dg.notifListenerSince).toLocaleDateString("ko-KR",{month:"2-digit",day:"2-digit"})
       : null;
-    add(`<h2>알림</h2><div class="card">
-      <table class="kv"><tbody>
-        <tr><td><b>전체</b> — 도착한 알림 (지속 알림 제외)<br>
-            <span style="color:var(--muted)">알림 접근을 켠 뒤부터만 기록 ${
-              since?`· ${since}~ (${nn}일)`:"· 아직 없음"}</span></td>
-            <td>${nAll}건/일</td></tr>
-        <tr><td><b>방해 가능</b> — 채널 중요도가 기본 이상<br>
-            <span style="color:var(--muted)">위와 같은 범위</span></td><td>${nInt}건/일</td></tr>
-        <tr><td><b>실제 방해</b> — 소리·진동·헤드업이 실제로 발생<br>
-            <span style="color:var(--muted)">시스템 이벤트라 설치 전 며칠치까지 소급됨</span></td>
-            <td>${dg.systemInterruptEvents ? nSys+"건/일" :
-              '<span style="color:var(--muted)">이 기기는 제공 안 함</span>'}</td></tr>
-      </tbody></table>
-      <p class="empty">세 값은 정의도, <b>수집 범위도</b> 다릅니다.
-      위 둘은 권한을 켠 뒤부터고 아래 하나만 소급됩니다. 다른 보고서와 비교할 때는 정의부터 맞춰야 합니다.</p>
+    add(`<h2>알림 — 발신 앱별</h2><div class="card">
+      <div id="c_npi"></div>
+      <p class="empty"><b>시스템 알림 이벤트</b> 기준 (건/일) — 알림 접근 없이도 수집되고
+      며칠 소급됩니다. 앱 이름이 성격을 말해줍니다 — 시스템·연동 알림인지, 사람이 답할 알림인지.</p>
       <div id="c_np" style="margin-top:10px"></div>
-      <p class="empty">위 막대는 <b>전체</b> 기준입니다.</p>
+      <p class="empty"><b>리스너 도착</b> 기준 (건/일) ${
+        since?`· ${since}~ (${nn}일)`:"· 아직 없음"} —
+      미디어 재생 갱신이 섞여 부풀 수 있습니다.</p>
     </div>`);
-    hbar($("c_np"),D.notifByApp.slice(0,8).map(x=>({k:x.key,v:x.count,t:r1(x.count)+"건"})),
+    const npi=(D.notifByAppInterrupt||[]);
+    if(npi.length) hbar($("c_npi"),npi.slice(0,8).map(x=>({k:x.key,v:x.count,t:r1(x.count)+"건"})),
+      cs("--s1"),120);
+    else $("c_npi").innerHTML='<p class="empty">이 기기는 시스템 알림 이벤트를 앱에 주지 않습니다.</p>';
+    if(D.notifByApp.length) hbar($("c_np"),D.notifByApp.slice(0,8).map(x=>({k:x.key,v:x.count,t:r1(x.count)+"건"})),
       cs("--s2"),120);
+    else $("c_np").innerHTML='<p class="empty">알림 접근을 켠 뒤부터 기록됩니다.</p>';
   }
 
   /* 외출 지표 — SSID 없이도 계산되므로 설치 전 구간까지 소급된다 */

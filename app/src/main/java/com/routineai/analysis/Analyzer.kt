@@ -82,11 +82,6 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val sessByDate = sessions.groupBy { it.start.toLocalDate() }
         val liveNotifs = notifs.filter { !it.ongoing }
         val notifByDate = liveNotifs.groupBy { it.ts.toLocalDate() }
-        val notifIntByDate = liveNotifs.filter { it.interruptive }.groupBy { it.ts.toLocalDate() }
-        // 시스템이 직접 남긴 방해 기록. 웹 보고서가 쓴 것과 같은 정의다.
-        // 기기가 이 이벤트를 서드파티 앱에 주는지는 기기마다 달라서 진단에도 싣는다.
-        val sysInterruptByDate = raw.filter { it.type == EVENT_NOTIFICATION_INTERRUPTION }
-            .groupBy { it.ts.toLocalDate() }
         // 리스너는 권한을 켠 뒤부터만 기록된다. 그 이전 날을 평균에 넣으면
         // 알림 수가 실제보다 낮게 나오므로 날짜마다 표시해 둔다.
         val notifSince = notifs.minOfOrNull { it.ts }
@@ -103,8 +98,6 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 microWakes = ss.count { it.durationMs < 30_000 },
                 noAppWakes = ss.count { it.durationMs < 30_000 && it.apps(launcher).isEmpty() },
                 notifs = notifByDate[d].orEmpty().size,
-                notifsInterruptive = notifIntByDate[d].orEmpty().size,
-                notifsSystemInterrupt = sysInterruptByDate[d].orEmpty().size,
                 notifCovered = notifSinceDate != null && !d.isBefore(notifSinceDate),
             )
         }
@@ -227,6 +220,15 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             .sortedByDescending { it.value }.take(10)
             .map { CountStat(label(it.key), (it.value.toDouble() / nNotifDays).r2()) }
 
+        // 시스템 방해 이벤트 기준 발신 앱별 집계. 리스너와 달리 소급되고,
+        // 관측 창도 리스너와 다르므로 하루 평균은 이 이벤트가 있는 날수로 나눈다.
+        val sysInterrupts = raw.filter { it.type == EVENT_NOTIFICATION_INTERRUPTION }
+        val sysInterruptDays = sysInterrupts.map { it.ts.toLocalDate() }
+            .distinct().size.coerceAtLeast(1)
+        val notifByAppInterrupt = sysInterrupts.groupingBy { it.pkg }.eachCount().entries
+            .sortedByDescending { it.value }.take(10)
+            .map { CountStat(label(it.key), (it.value.toDouble() / sysInterruptDays).r2()) }
+
         // ---- 장소 ----
         val places = places(netChanges, now)
 
@@ -270,7 +272,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 "그 이전 날짜의 알림 수는 0으로 보이지만 실제로 0이었던 것은 아닙니다."
         }
         if (notifs.isEmpty() && raw.any { it.type == EVENT_NOTIFICATION_INTERRUPTION }) {
-            warnings += "알림 리스너 기록은 없지만 시스템 방해 기록은 있습니다. " +
+            warnings += "알림 리스너 기록은 없지만 시스템 알림 기록은 있습니다. " +
                 "알림 접근을 켜기 전 구간이라 그렇습니다."
         }
         if (netBuckets.isEmpty()) {
@@ -308,7 +310,8 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             ),
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
             transitions = transitions, coUse = coUse, firstApps = first,
-            notifByApp = notifByApp, sessionAppCount = sessionAppCount,
+            notifByApp = notifByApp, notifByAppInterrupt = notifByAppInterrupt,
+            sessionAppCount = sessionAppCount,
             places = places, timeFixed = timeFixed,
             outing = outing, outingByWeekday = outingWd,
             quality = Quality(
