@@ -156,6 +156,43 @@ def backfill(buckets):
     return con
 
 
+# 데모에서 빼기로 한 앱. 사용 이벤트·알림·통신량 어디에도 안 나오게 지운다.
+# 도구가 지우므로 재추출해도 다시 적용된다.
+EXCLUDE_PKGS = [
+    "com.example.browser",
+    "com.example.social",
+]
+
+# 삭제된 앱은 pm 으로 uid 를 되돌릴 수 없다. 기기 화면의 앱별 통신량과 DB 의
+# uid 별 합계를 대조해 확정한 값 (앱 A=10001, 앱 B=10002 — 이웃
+# uid 들도 전부 화면 값과 일치함을 확인).
+EXCLUDE_UIDS = [10001, 10002]
+
+
+def exclude_pkgs(adb_path):
+    """데모 제외 앱의 흔적을 모든 테이블에서 지운다. 통신량은 uid 로 지운다."""
+    con = sqlite3.connect(ASSET)
+    uids = list(EXCLUDE_UIDS)
+    out = subprocess.run([adb_path, "shell", "pm", "list", "packages", "-U"],
+                         capture_output=True)
+    for line in out.stdout.decode(errors="replace").splitlines():
+        m = re.match(r"package:(\S+) uid:(\d+)", line.strip())
+        if m and m.group(1) in EXCLUDE_PKGS:
+            uids.append(int(m.group(2)))
+
+    qmarks = ",".join("?" * len(EXCLUDE_PKGS))
+    a = con.execute(f"DELETE FROM usage_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
+    b = con.execute(f"DELETE FROM notif_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
+    c = 0
+    if uids:
+        c = con.execute(
+            "DELETE FROM net_bucket WHERE uid IN (%s)" % ",".join("?" * len(uids)),
+            uids).rowcount
+    con.commit(); con.close()
+    print(f"데모 제외 앱 정리: usage {a}, notif {b}, net {c}행 "
+          f"({', '.join(p.split('.')[-1] for p in EXCLUDE_PKGS)})")
+
+
 def backfill_bt(adb_path):
     """
     dumpsys bluetooth_manager 의 연결 이력을 bt_event 로 변환한다.
@@ -381,6 +418,7 @@ if __name__ == "__main__":
     if not args.keep_history:
         trim_to_events(con)
     verify(con)
+    exclude_pkgs(a or adb())
     backfill_bt(a or adb())
     if args.synth_bt:
         synth_bt()
