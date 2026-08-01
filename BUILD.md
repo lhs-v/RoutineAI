@@ -48,13 +48,15 @@ app/src/main/assets/demo/routine.db
 공개 저장소에 올리지 않는다. 파일을 따로 받아 위 경로에 두고 다시 빌드하면 된다.
 없으면 토글이 잠긴 채 이유가 화면에 표시되고, 나머지 기능은 정상 동작한다.
 
-직접 만들려면 앱을 얼마간 쓴 기기에서 뽑는다.
+직접 만들려면 앱을 얼마간 쓴 기기를 USB 로 연결하고 도구를 돌린다.
 
 ```bash
-adb exec-out run-as com.routineai cat databases/routine.db > demo.db
+python tools/make_demo_db.py
 ```
 
-WAL 이 남아 있으면 최근 기록이 빠지므로, 한 번 열어 체크포인트한 뒤 쓰는 편이 안전하다.
+앱 DB 를 뽑아(WAL 체크포인트 포함) 에셋 자리에 두고, `dumpsys netstats` 의
+SSID 별 이력을 앱 수집 포맷(`net_change`)으로 변환해 설치 전 구간을 소급해 채운다.
+값을 지어내는 단계는 없다 — 모든 행이 폰이 실제로 기록한 측정값에서 나온다.
 
 > 데모 폰에 그냥 보여주기만 할 거라면 APK 를 통째로 건네는 편이 간단하다.
 > 데모 로그는 APK 안에 들어가고, APK 는 저장소에 올라가지 않는다(`*.apk` 무시).

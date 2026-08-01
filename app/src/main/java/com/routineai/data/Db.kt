@@ -33,10 +33,15 @@ abstract class Db : RoomDatabase() {
          * 쓰기는 하지 않는다. 수집은 언제나 [get] 쪽 실제 DB 에만 쌓인다.
          */
         fun demo(ctx: Context): Db = demoInstance ?: synchronized(this) {
-            demoInstance ?: Room.databaseBuilder(
-                ctx.applicationContext, Db::class.java, DEMO_DB
-            ).createFromAsset("$DEMO_ASSET_DIR/$DEMO_ASSET_FILE")
-                .build().also { demoInstance = it }
+            demoInstance ?: run {
+                // createFromAsset 은 DB 파일이 없을 때 한 번만 복사한다. 에셋을 갈아끼워도
+                // 이전 복사본이 남아 옛 데이터가 계속 보이므로, 열 때마다 지우고 새로 복사한다.
+                // 데모는 읽기 전용이라 지워도 잃을 것이 없고, 복사는 프로세스당 한 번이다.
+                ctx.applicationContext.deleteDatabase(DEMO_DB)
+                Room.databaseBuilder(ctx.applicationContext, Db::class.java, DEMO_DB)
+                    .createFromAsset("$DEMO_ASSET_DIR/$DEMO_ASSET_FILE")
+                    .build().also { demoInstance = it }
+            }
         }
 
         /**

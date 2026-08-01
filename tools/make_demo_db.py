@@ -1,0 +1,228 @@
+# 데모 DB 생성 도구.
+#
+# 연결된 폰에서 앱의 실제 DB 를 뽑아 데모 에셋(app/src/main/assets/demo/routine.db)을
+# 만들고, 폰의 netstats 원본(dumpsys)에서 SSID 이력을 앱 수집 포맷(net_change)으로
+# 변환해 소급 구간을 채운다.
+#
+# 원칙: 값을 지어내지 않는다. 모든 행은 폰이 실제로 기록한 측정값에서만 나온다.
+#  - net_bucket / usage_event / notif_event: 앱 DB 를 그대로 복사
+#  - net_change 소급분: dumpsys netstats 의 SSID 별 버킷에서 "그 시간에 어느 망이
+#    우세했나" 를 계산해 접속 변화 시점으로 변환. 앱이 그 시점에 설치되어 있었다면
+#    recordCurrentNetwork() 가 남겼을 행과 같은 의미다.
+#
+# 사용:
+#   python tools/make_demo_db.py            # adb 로 뽑기 + 백필 + 검증까지 전부
+#   python tools/make_demo_db.py --no-pull  # 이미 있는 에셋에 백필만 다시
+#
+# 데모 에셋은 실제 사용 기록이라 저장소에 올리지 않는다(.gitignore). BUILD.md 참고.
+
+import argparse
+import datetime
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ASSET = os.path.join(REPO, "app", "src", "main", "assets", "demo", "routine.db")
+KST = datetime.timezone(datetime.timedelta(hours=9))
+PKG = "com.routineai"
+
+
+def kst(ms):
+    return datetime.datetime.fromtimestamp(ms / 1000, KST)
+
+
+def adb():
+    for c in (
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk",
+                     "platform-tools", "adb.exe"),
+        "adb",
+    ):
+        try:
+            subprocess.run([c, "version"], capture_output=True, check=True)
+            return c
+        except Exception:
+            continue
+    sys.exit("adb 를 찾을 수 없습니다")
+
+
+def pull_db(adb_path):
+    """앱 DB 를 WAL 포함해 뽑아 단일 파일로 정리한 뒤 에셋 자리에 둔다."""
+    tmp = ASSET + ".pull"
+    for suffix in ("", "-wal", "-shm"):
+        out = subprocess.run(
+            [adb_path, "exec-out", "run-as", PKG, "cat", f"databases/routine.db{suffix}"],
+            capture_output=True)
+        if out.returncode != 0 and suffix == "":
+            sys.exit("DB 를 뽑지 못했습니다: " + out.stderr.decode(errors="replace"))
+        with open(tmp + suffix, "wb") as f:
+            f.write(out.stdout)
+    con = sqlite3.connect(tmp)
+    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    os.makedirs(os.path.dirname(ASSET), exist_ok=True)
+    if os.path.exists(ASSET):
+        os.remove(ASSET)
+    con.execute("VACUUM INTO ?", (ASSET.replace(os.sep, "/"),))
+    con.close()
+    # sqlite 가 연결을 닫으며 -wal/-shm 을 스스로 지울 수 있다.
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(tmp + suffix):
+            os.remove(tmp + suffix)
+    print(f"에셋 갱신: {os.path.getsize(ASSET):,} 바이트")
+
+
+def dump_netstats(adb_path, path):
+    out = subprocess.run([adb_path, "shell", "dumpsys", "netstats", "--full"],
+                         capture_output=True)
+    if out.returncode != 0 or len(out.stdout) < 1000:
+        sys.exit("dumpsys netstats 실패: " + out.stderr.decode(errors="replace"))
+    with open(path, "wb") as f:
+        f.write(out.stdout)
+    print(f"netstats 덤프: {len(out.stdout):,} 바이트 -> {path}")
+
+
+def parse_netstats(path):
+    """
+    dumpsys netstats --full 에서 (버킷 시작 ms, 망 라벨) -> 바이트 를 만든다.
+    망 라벨은 SSID(와이파이) 또는 "cellular".
+
+    이 기기(Android 16 / One UI)의 Xt stats 형식:
+      ident=[{type=1, ratType=COMBINED, wifiNetworkKey="SSID"wpa2-psk, ...}] uid=-1 ...
+      ident=[{type=0, ratType=-2, subscriberId=..., ...}] uid=-1 ...
+      이어지는 히스토리 줄:  st=<epoch초> rb=<수신> rp=<패킷> tb=<송신> tp=<패킷> op=0
+    type=1 이 Wi-Fi(SSID 는 wifiNetworkKey), type=0 이 모바일이다.
+    uid=-1(망별 합계)만 존재함을 확인했다 — per-uid 이력이 섞이면 중복 합산되므로,
+    형식이 바뀌면 이 함수만 고치면 된다. 아래 단계는 형식과 무관하다.
+    """
+    buckets = {}  # (bucket_ms, label) -> bytes
+    label = None
+    ident_re = re.compile(r"ident=\[\{type=(\d+)")
+    key_re = re.compile(r'wifiNetworkKey="([^"]*)"')
+    hist_re = re.compile(r"^\s*st=(\d+)\s+rb=(\d+)\s+rp=\d+\s+tb=(\d+)")
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = ident_re.search(line)
+            if m:
+                key = key_re.search(line)
+                if m.group(1) == "1" and key:
+                    label = key.group(1)        # Wi-Fi: SSID 그대로
+                elif m.group(1) == "0":
+                    label = "cellular"
+                else:
+                    label = None                # 기타(이더넷 등)는 제외
+                continue
+            m = hist_re.match(line)
+            if m and label is not None:
+                st, rb, tb = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                ms = st * 1000 if st < 10**12 else st  # 초/밀리초 양쪽 대응
+                buckets[(ms, label)] = buckets.get((ms, label), 0) + rb + tb
+    return buckets
+
+
+def backfill(buckets):
+    """버킷별 우세 망 -> 접속 변화 행. 앱이 실제로 기록하기 시작한 시점 이전만 채운다.
+
+    경계는 net_change 의 최소 ts 가 아니라 kv.first_sync(설치 시각)다.
+    전자로 잡으면 이전 실행이 넣은 소급 행이 경계가 되어 재실행이 불가능해진다.
+    recordCurrentNetwork() 가 first_sync 기록보다 몇 초 먼저 돌므로 여유를 둔다.
+    """
+    con = sqlite3.connect(ASSET)
+    row = con.execute("SELECT v FROM kv WHERE k='first_sync'").fetchone()
+    first_real = (int(row[0]) - 600_000) if row else float("inf")
+
+    per_start = {}  # bucket_ms -> {label: bytes}
+    for (ms, label), b in buckets.items():
+        per_start.setdefault(ms, {})[label] = per_start.setdefault(ms, {}).get(label, 0) + b
+
+    rows, cur = [], None
+    for ms in sorted(per_start):
+        if ms >= first_real:
+            break
+        label = max(per_start[ms], key=per_start[ms].get)
+        state = ("cellular", None) if label == "cellular" else ("wifi", label)
+        if state != cur:
+            rows.append((ms, state[0], state[1]))
+            cur = state
+
+    # 소급분을 다시 만들 수 있도록 이전 소급분은 지우고 넣는다 (실제 수집분은 보존).
+    deleted = con.execute("DELETE FROM net_change WHERE ts < ?", (first_real,)).rowcount
+    con.executemany("INSERT INTO net_change (ts, kind, ssid) VALUES (?,?,?)", rows)
+    con.commit()
+    print(f"net_change 백필: {deleted}행 제거, {len(rows)}행 삽입"
+          + (f" ({kst(rows[0][0]):%m-%d} ~ {kst(rows[-1][0]):%m-%d})" if rows else ""))
+    return con
+
+
+def trim_to_events(con):
+    """모든 축의 시작점을 사용 이벤트의 시작점으로 통일한다.
+
+    통신량·SSID 는 몇 달 소급되지만 사용 이벤트는 며칠뿐이라, 그대로 두면
+    지표마다 관측 창이 달라진다. 데모에서는 "모든 정보가 다 있는 구간"만 남겨
+    시작점을 하나로 맞춘다. 긴 소급을 보고 싶으면 --keep-history 로 건너뛴다.
+    """
+    start = con.execute("SELECT MIN(ts) FROM usage_event").fetchone()[0]
+    if start is None:
+        return
+    # 경계 직전의 마지막 상태를 경계 시점으로 이월한다. 그냥 지우면
+    # 창 시작부터 첫 변화까지의 접속 상태가 비어 버린다.
+    carry = con.execute(
+        "SELECT kind, ssid FROM net_change WHERE ts < ? ORDER BY ts DESC LIMIT 1",
+        (start,)).fetchone()
+    a = con.execute("DELETE FROM net_bucket WHERE bucketStart < ?", (start,)).rowcount
+    b = con.execute("DELETE FROM net_change WHERE ts < ?", (start,)).rowcount
+    c = con.execute("DELETE FROM notif_event WHERE ts < ?", (start,)).rowcount
+    if carry:
+        con.execute("INSERT INTO net_change (ts, kind, ssid) VALUES (?,?,?)",
+                    (start, carry[0], carry[1]))
+    con.commit()
+    con.execute("VACUUM")
+    print(f"시작점 통일: {kst(start):%m-%d %H:%M} 이전 제거 "
+          f"(net_bucket {a}, net_change {b}, notif {c}행)")
+
+
+def verify(con):
+    """places()/외출 지표가 쓰는 방식으로 재집계해 눈으로 검증할 요약을 낸다."""
+    rows = con.execute("SELECT ts, kind, ssid FROM net_change ORDER BY ts").fetchall()
+    hours, nights = {}, {}
+    for i, (ts, kind, ssid) in enumerate(rows):
+        end = rows[i + 1][0] if i + 1 < len(rows) else ts
+        key = ssid if kind == "wifi" and ssid else kind
+        hours[key] = hours.get(key, 0) + (end - ts) / 3_600_000
+        t = ts
+        while t < end:
+            if kind == "wifi" and 0 <= kst(t).hour <= 5:
+                nights.setdefault(key, set()).add(kst(t).date())
+            t += 3_600_000
+    print("검증 — 별칭별 체류 (앱 places() 와 같은 계산):")
+    for k in sorted(hours, key=hours.get, reverse=True):
+        print(f"  {k:24s} {hours[k]:7.0f} h   밤 {len(nights.get(k, [])):3d}일")
+    con.close()
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-pull", action="store_true", help="에셋 갱신 없이 백필만")
+    ap.add_argument("--dump", help="이미 받아둔 dumpsys netstats 파일 사용")
+    ap.add_argument("--keep-history", action="store_true",
+                    help="시작점 통일(사용 이벤트 이전 구간 제거)을 건너뛴다")
+    args = ap.parse_args()
+
+    a = None if (args.no_pull and args.dump) else adb()
+    if not args.no_pull:
+        pull_db(a)
+    # 덤프를 assets 안에 두면 APK 에 패키징된다. 반드시 밖에 둔다.
+    dump_path = args.dump or os.path.join(tempfile.gettempdir(), "routineai-netstats.txt")
+    if not args.dump:
+        dump_netstats(a, dump_path)
+    b = parse_netstats(dump_path)
+    if not b:
+        sys.exit("덤프에서 버킷을 하나도 읽지 못했습니다 — parse_netstats() 의 "
+                 "정규식을 이 기기의 출력 형식에 맞춰 조정하세요: " + dump_path)
+    print(f"버킷 {len(b):,}개, 망 {len(set(k[1] for k in b)):d}종")
+    con = backfill(b)
+    if not args.keep_history:
+        trim_to_events(con)
+    verify(con)
