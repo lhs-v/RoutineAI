@@ -69,6 +69,7 @@ import com.routineai.data.ProposalRow
 import com.routineai.interpret.ProposalEngine
 import com.routineai.watch.Applier
 import com.routineai.watch.SuggestionOverlay
+import com.routineai.watch.WatchStatus
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
@@ -318,6 +319,12 @@ class MainActivity : ComponentActivity() {
                                 prefs.lastReportAt = 0L
                             },
                             onPermChanged = { permTick++ },
+                            onChanged = {
+                                proposalsTick++
+                                reportJson = prefs.lastReport.ifBlank { null }
+                                reportAt = prefs.lastReportAt
+                                reportMsg = ""
+                            },
                             onAzureChange = {
                                 azure = it
                                 prefs.azureEndpoint = it.endpoint
@@ -551,6 +558,10 @@ class MainActivity : ComponentActivity() {
             proposals = withContext(Dispatchers.IO) { Db.get(ctx).dao().proposals() }
         }
         val note = remember(refreshTick) { ProposalEngine.decodeNote(prefs.lastAnalysisNote) }
+        var watch by remember { mutableStateOf<WatchStatus.Snapshot?>(null) }
+        LaunchedEffect(refreshTick) {
+            watch = withContext(Dispatchers.IO) { WatchStatus.read(ctx) }
+        }
 
         fun decide(p: ProposalRow, state: String, eventKind: String) {
             lifecycleScope.launch(Dispatchers.IO) {
@@ -638,6 +649,42 @@ class MainActivity : ComponentActivity() {
             if (dismissed.isNotEmpty()) {
                 Section("보지 않기로 함 ${dismissed.size}", "다시 제안되지 않습니다.")
                 dismissed.forEach { p -> ProposalCard(p, dimmed = true) }
+            }
+
+            // 억제 규칙이 여럿이라 화면에 이유가 없으면 고장인지 설계인지 알 수 없다.
+            watch?.let { w ->
+                if (w.lines.isNotEmpty()) {
+                    HorizontalDivider()
+                    var open by remember { mutableStateOf(false) }
+                    OutlinedButton(onClick = { open = !open }) {
+                        Text(if (open) "감시 상태 접기" else "감시 상태 보기")
+                    }
+                    if (open) {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(
+                                Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                w.lines.forEach { line ->
+                                    Row {
+                                        Text(
+                                            line.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.weight(1f),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            line.value,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (line.warn) WARN
+                                            else MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if (note.analysisNote.isNotBlank() || note.rejected.isNotEmpty()) {
@@ -779,6 +826,7 @@ class MainActivity : ComponentActivity() {
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
         onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
+        onChanged: () -> Unit,
     ) {
         val ctx = LocalContext.current
         val locLauncher = rememberLauncherForActivityResult(
@@ -1059,6 +1107,40 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = WARN,
                 )
+            }
+
+            // ---- 4. 데모 초기화 ----
+            //
+            // 리허설을 처음부터 다시 하려면 어디까지 되돌릴지 고를 수 있어야 한다.
+            // 수집한 로그까지 지우면 다시 며칠 기다려야 하므로 단계를 나눈다.
+            Section(
+                "4. 데모 초기화",
+                "리허설을 처음 상태로 되돌립니다. 수집한 로그는 건드리지 않습니다.",
+            )
+            var resetMsg by remember { mutableStateOf("") }
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) { WatchStatus.resetProposals(ctx) }
+                        resetMsg = "제안과 결정 이력을 지웠습니다. 제안 탭에서 다시 분석하세요."
+                        onChanged()
+                    }
+                },
+            ) { Text("제안·결정 이력 지우기") }
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) { WatchStatus.resetProposals(ctx) }
+                        prefs.clearReportAndAnalysis()
+                        resetMsg = "리포트까지 지웠습니다. 대시보드 → 리포트 생성부터 시작하세요."
+                        onChanged()
+                    }
+                },
+            ) { Text("리포트까지 지우기 (완전 초기화)") }
+            if (resetMsg.isNotBlank()) {
+                Notice(OK, resetMsg)
             }
             Spacer(Modifier.height(40.dp))
         }

@@ -83,6 +83,16 @@ interface UsageDao {
     @Query("DELETE FROM proposal WHERE signature = :sig")
     suspend fun deleteProposal(sig: String)
 
+    @Query("DELETE FROM proposal")
+    suspend fun clearProposals()
+
+    @Query("DELETE FROM proposal_event")
+    suspend fun clearProposalEvents()
+
+    /** 최근 노출 이력 — 방해 예산이 얼마나 남았는지 보여주기 위한 것 */
+    @Query("SELECT COUNT(*) FROM proposal_event WHERE kind = 'surfaced' AND ts > :since")
+    suspend fun surfacedSince(since: Long): Int
+
     @Insert
     suspend fun logProposalEvent(row: ProposalEventRow)
 

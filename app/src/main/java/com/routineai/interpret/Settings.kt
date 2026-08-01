@@ -84,6 +84,14 @@ class Settings(ctx: Context) {
 
     fun accentColor(): Int = ACCENTS[accent] ?: ACCENTS.getValue(DEFAULT_ACCENT)
 
+    /** 데모를 처음부터 다시 보여줄 때 화면 상태까지 되돌린다. */
+    fun clearReportAndAnalysis() {
+        lastReport = ""
+        lastReportAt = 0L
+        lastAnalysisAt = 0L
+        lastAnalysisNote = ""
+    }
+
     fun azureConfig(): AzureConfig =
         AzureConfig(azureEndpoint, azureApiKey, azureApiVersion, azureDeployment)
 

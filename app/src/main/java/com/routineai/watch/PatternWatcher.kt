@@ -24,14 +24,14 @@ object PatternWatcher {
     private const val TAG = "PatternWatcher"
 
     /** 같은 제안을 이 간격 안에 다시 띄우지 않는다 (연타 방지용 최소 간격) */
-    private const val RESURFACE_MS = 20L * 60 * 1000
+    const val RESURFACE_MS = 20L * 60 * 1000
 
     /** 하루 방해 예산. 좋은 제안이라도 이만큼 넘으면 제안 탭에 조용히 쌓인다. */
-    private const val DAILY_BUDGET = 3
+    const val DAILY_BUDGET = 3
     private const val PER_CATEGORY_BUDGET = 1
 
     /** 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
-    private const val BUCKET_REJECT_LIMIT = 2
+    const val BUCKET_REJECT_LIMIT = 2
 
     /** app_mode 로 바꿔둔 설정. 이탈 시 되돌리기 위해 기억한다. */
     private val activeModes = HashMap<String, ProposalRow>()
