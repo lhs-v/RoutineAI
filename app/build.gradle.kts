@@ -8,7 +8,8 @@ plugins {
 
 android {
     namespace = "com.routineai"
-    compileSdk = 35
+    // health-connect 1.1.0 이 36 을 요구한다. targetSdk 는 35 유지 — 런타임 동작 불변.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.routineai"
@@ -56,4 +57,5 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    implementation(libs.androidx.health.connect)
 }

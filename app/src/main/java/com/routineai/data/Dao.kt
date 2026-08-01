@@ -56,6 +56,18 @@ interface UsageDao {
     @Query("SELECT * FROM net_change ORDER BY ts DESC LIMIT 1")
     suspend fun lastNetChange(): NetworkChangeRow?
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertBt(row: BtEventRow)
+
+    @Query("SELECT * FROM bt_event WHERE ts >= :from AND ts < :to ORDER BY ts ASC")
+    suspend fun btEvents(from: Long, to: Long): List<BtEventRow>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertHealth(rows: List<HealthSessionRow>)
+
+    @Query("SELECT * FROM health_session WHERE tsStart >= :from AND tsStart < :to ORDER BY tsStart ASC")
+    suspend fun healthSessions(from: Long, to: Long): List<HealthSessionRow>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(row: KvRow)
 

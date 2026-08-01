@@ -66,6 +66,42 @@ data class NetworkChangeRow(
     val ssid: String?,
 )
 
+/**
+ * 블루투스 연결/해제 순간. 리시버가 실시간으로 남긴다.
+ *
+ * 과거 이력은 시스템이 앱에 주지 않으므로 설치 시점부터만 쌓인다.
+ * 기기 이름은 "무엇과 연결됐나"(버즈·워치·차량)가 행동 맥락이므로 그대로 두되,
+ * MAC 주소는 저장하지 않는다 — 식별자일 뿐 맥락 정보가 없다.
+ */
+@Entity(tableName = "bt_event", indices = [Index(value = ["ts"])])
+data class BtEventRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: Long,
+    /** "connect" | "disconnect" */
+    val action: String,
+    val name: String,
+    /** BluetoothClass major device class. 이름이 없을 때의 분류 실마리 */
+    val majorClass: Int,
+)
+
+/**
+ * Health Connect 의 세션 기록 (운동·수면).
+ *
+ * 수면 세션은 화면 공백 기반 수면 추정과 교차 검증할 수 있는 유일한 독립 소스다.
+ * (tsStart, kind) 유니크 — 재수집 시 중복을 막는다.
+ */
+@Entity(
+    tableName = "health_session",
+    indices = [Index(value = ["tsStart", "kind"], unique = true), Index(value = ["tsStart"])]
+)
+data class HealthSessionRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val tsStart: Long,
+    val tsEnd: Long,
+    /** "exercise:<타입>" | "sleep" */
+    val kind: String,
+)
+
 /** 마지막 수집 시각 등 내부 상태 */
 @Entity(tableName = "kv")
 data class KvRow(@PrimaryKey val k: String, val v: String)

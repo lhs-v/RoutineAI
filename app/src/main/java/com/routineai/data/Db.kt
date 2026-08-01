@@ -1,15 +1,19 @@
 package com.routineai.data
 
 import android.content.Context
+import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
     entities = [UsageEventRow::class, NotifEventRow::class, NetBucketRow::class,
-        NetworkChangeRow::class, KvRow::class],
-    version = 1,
+        NetworkChangeRow::class, KvRow::class, BtEventRow::class, HealthSessionRow::class],
+    version = 2,
     exportSchema = true,
+    // v1 -> v2: bt_event, health_session 테이블 추가만. 기존 테이블은 그대로라
+    // 자동 마이그레이션으로 충분하다. 스냅샷은 app/schemas 에 있다.
+    autoMigrations = [AutoMigration(from = 1, to = 2)],
 )
 abstract class Db : RoomDatabase() {
     abstract fun dao(): UsageDao

@@ -3,6 +3,7 @@ package com.routineai
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -61,6 +62,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.routineai.analysis.Analyzer
 import com.routineai.analysis.Report
+import androidx.health.connect.client.PermissionController
+import com.routineai.collect.HealthCollector
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
@@ -142,6 +145,16 @@ class MainActivity : ComponentActivity() {
         val locOk = remember(permTick) {
             ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
+        }
+        val btOk = remember(permTick) {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+        // Health Connect 권한은 동기 조회가 없어 상태로 들고 갱신한다.
+        var healthOk by remember { mutableStateOf(false) }
+        LaunchedEffect(permTick) {
+            healthOk = withContext(Dispatchers.IO) { HealthCollector.grantedAll(ctx) }
         }
 
         var statusTick by remember { mutableIntStateOf(0) }
@@ -258,6 +271,7 @@ class MainActivity : ComponentActivity() {
 
                         else -> SettingsTab(
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
+                            btOk = btOk, healthOk = healthOk,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -534,7 +548,8 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun SettingsTab(
-        usageOk: Boolean, notifOk: Boolean, locOk: Boolean, busy: Boolean,
+        usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
+        btOk: Boolean, healthOk: Boolean, busy: Boolean,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
         onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
@@ -543,6 +558,13 @@ class MainActivity : ComponentActivity() {
         val locLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { onPermChanged() }
+        val btLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { onPermChanged() }
+        val healthLauncher = rememberLauncherForActivityResult(
+            PermissionController.createRequestPermissionResultContract()
+        ) { onPermChanged() }
+        val healthAvailable = remember { HealthCollector.isAvailable(ctx) }
 
         Column(
             Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -622,6 +644,34 @@ class MainActivity : ComponentActivity() {
                 where = "아래 버튼을 누르면 시스템 대화상자가 뜹니다",
                 onClick = { locLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
             )
+            PermCard(
+                title = "블루투스 연결 기록",
+                required = false,
+                granted = btOk,
+                what = "버즈·워치·차량 같은 기기와 연결되는 순간을 기록합니다. " +
+                    "\"버즈 연결 → 음악 앱\" 같은 이벤트 연쇄의 재료입니다.",
+                without = "BT 기반 연쇄·맥락 지표가 빕니다.",
+                where = "아래 버튼을 누르면 시스템 대화상자가 뜹니다",
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        btLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                    }
+                },
+            )
+            if (healthAvailable) {
+                PermCard(
+                    title = "Health Connect (운동·수면)",
+                    required = false,
+                    granted = healthOk,
+                    what = "워치가 삼성 헬스에 남긴 운동·수면 세션을 읽습니다. " +
+                        "행동의 상태 맥락이자, 화면 공백 기반 수면 추정의 교차 검증 소스입니다.",
+                    without = "운동 연쇄가 비고 수면은 화면 공백 추정만 남습니다.",
+                    where = "아래 버튼을 누르면 Health Connect 권한 화면이 뜹니다",
+                    onClick = { healthLauncher.launch(HealthCollector.PERMISSIONS) },
+                )
+            } else {
+                Notice(WARN, "이 기기에서 Health Connect 를 쓸 수 없어 운동·수면 수집이 꺼집니다.")
+            }
             Text(
                 "권한을 켜고 돌아오면 이 화면이 자동으로 갱신됩니다.",
                 style = MaterialTheme.typography.bodySmall,

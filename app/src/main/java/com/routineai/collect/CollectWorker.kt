@@ -30,6 +30,10 @@ class CollectWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
             val net = NetworkCollector(applicationContext)
             net.recordCurrentNetwork()
 
+            // 유니크 인덱스가 중복을 걸러주므로 넉넉히 30일 창으로 다시 읽는다.
+            HealthCollector(applicationContext)
+                .collect(now - 30L * 24 * 60 * 60 * 1000, now)
+
             val dao = com.routineai.data.Db.get(applicationContext).dao()
             if (dao.get(KEY_NET_BACKFILLED) == null) {
                 // 통신량은 시스템이 몇 달치 들고 있는 경우가 많다.

@@ -26,6 +26,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- 블루투스 연결/해제 기록. 기기 이름을 읽으려면 런타임 허용이 필요합니다. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Health Connect 읽기. 운동·수면 세션은 행동의 상태 맥락이자
+         화면 공백 기반 수면 추정을 교차 검증할 유일한 독립 소스입니다. -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+
     <application
         android:name=".RoutineApp"
         android:allowBackup="false"
@@ -43,6 +51,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- BT 연결/해제. ACL 브로드캐스트는 암시적 제한 예외라 매니페스트 리시버로 받는다. -->
+        <receiver android:name=".collect.BtReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Health Connect 권한 사용 근거 화면 (권한 요청 시 시스템이 이 인텐트를 띄운다) -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- 알림 통계용. 사용자가 '알림 접근'에서 직접 허용해야 동작합니다. -->
         <service
