@@ -281,10 +281,12 @@ def synth_bt():
         # 직전의 다른 앱 실행보다 뒤에 connect 를 둬야 이 앱과 짝지어진다.
         i = bisect.bisect_left(all_ts, start)
         prev_ts = all_ts[i - 1] if i > 0 else 0
-        max_gap = min(90_000, start - prev_ts - 2_000)
+        max_gap = min(45_000, start - prev_ts - 2_000)
         if max_gap < 3_000:
             continue    # 직전까지 폰을 쓰고 있던 구간 — 앵커 불가, 건너뜀
-        connect = start - rng.randint(3_000, int(max_gap))
+        # 이어폰을 끼고 곧장 앱을 여는 습관이므로 간격은 몇 초대에 몰린다.
+        # 삼각분포(최빈 6초, 꼬리 ~45초): 폰을 꺼내 잠금 해제하는 시간 정도.
+        connect = start - min(int(rng.triangular(3_000, 45_000, 6_000)), int(max_gap))
         if open_until is not None:
             rows.append((min(open_until, connect - rng.randint(60, 300) * 1000),
                          "disconnect", NAME, -1))
