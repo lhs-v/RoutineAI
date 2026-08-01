@@ -94,22 +94,23 @@ object Applier {
         val a11y = PatternAccessibilityService.isConnected()
 
         return runCatching {
-            // 앵커가 없으면(제안 탭에서 누른 경우) 기준 앱부터 띄운다.
-            if (anchor == null) {
-                intentFor(ctx, base)?.let {
-                    ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-                Thread.sleep(SPLIT_STEP_MS)
+            // 기준 앱을 확실히 앞으로 가져온다. 팝업 경로라 이미 떠 있어도
+            // 다시 startActivity 해서 태스크를 안정된 상태로 만든 뒤 토글해야
+            // 접근성이 붙잡을 대상이 흔들리지 않는다(순서 문제 실측).
+            intentFor(ctx, base)?.let {
+                ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
+            Thread.sleep(SPLIT_STEP_MS)
 
             // 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
-            // 다만 좁은 화면(폴더블 커버 등)에서는 시스템이 분할 자체를
-            // 지원하지 않아 토글이 무시된다 — 실측으로 확인한 지점이다.
-            val toggled = if (a11y && widthDp >= MIN_SPLIT_DP) {
-                PatternAccessibilityService.toggleSplitScreen()
+            // 좁은 화면에서도 force_resizable 이 켜져 있으면 될 수 있으므로
+            // 시도는 하되, 결과를 검증해 실패하면 순차 실행으로 정직하게 떨어진다.
+            val toggled = if (a11y) {
+                PatternAccessibilityService.toggleSplitScreen().also {
+                    if (it) Thread.sleep(SPLIT_STEP_MS * 2)
+                }
             } else false
             Log.i(TAG, "앱페어: a11y=$a11y widthDp=$widthDp toggled=$toggled")
-            if (toggled) Thread.sleep(SPLIT_STEP_MS)
 
             ctx.startActivity(
                 intentFor(ctx, other)!!.addFlags(
@@ -122,13 +123,19 @@ object Applier {
         }.getOrElse { Result(false, "앱페어 실행 실패: ${it.message}", real = false) }
     }
 
-    /** 왜 분할이 안 됐는지를 사용자가 알 수 있게 구분해 알린다. */
+    /**
+     * 왜 분할이 안 됐는지를 사용자가 알 수 있게 구분해 알린다.
+     *
+     * 실측: 삼성은 접근성이 붙어 있어도 커버 화면(sw480dp)에서 토글을
+     * 거부했다. 좁은 화면 때문인지 One UI 정책인지 구분이 안 되므로,
+     * 폭이 작으면 펼치기를 먼저 권한다.
+     */
     private fun splitMessage(toggled: Boolean, a11y: Boolean, widthDp: Int): String = when {
         toggled -> "두 앱을 분할화면으로 열었습니다"
-        widthDp < MIN_SPLIT_DP ->
-            "두 앱을 열었습니다. 이 화면은 좁아 분할이 안 됩니다 — 펼친 화면에서 다시 시도해 보세요"
         !a11y -> "두 앱을 열었습니다. 분할화면으로 나누려면 설정에서 접근성을 켜주세요"
-        else -> "두 앱을 열었습니다. 이 기기에서는 분할화면 전환이 지원되지 않습니다"
+        widthDp < MIN_SPLIT_DP ->
+            "두 앱을 열었습니다. 좁은 화면에서는 분할이 막힙니다 — 펼친 뒤 다시 시도해 보세요"
+        else -> "두 앱을 열었습니다. 이 기기가 분할화면 전환을 막고 있습니다"
     }
 
     private fun launch(ctx: Context, pkg: String?): Result {

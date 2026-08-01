@@ -38,6 +38,8 @@ class WatchService : Service() {
     private var loop: Job? = null
     private var lastPkg: String? = null
     private var cursor = 0L
+    private var btConnected: Set<String> = emptySet()
+    private var btInitialized = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -49,6 +51,7 @@ class WatchService : Service() {
         loop = scope.launch {
             while (isActive) {
                 runCatching { poll() }.onFailure { Log.w(TAG, "폴링 실패", it) }
+                runCatching { pollBluetooth() }.onFailure { Log.w(TAG, "BT 폴링 실패", it) }
                 delay(POLL_MS)
             }
         }
@@ -77,6 +80,63 @@ class WatchService : Service() {
         lastPkg = pkg
         PatternWatcher.onAppForeground(applicationContext, pkg)
     }
+
+    /**
+     * BT 연결 상태를 상태 변화로 환산한다. 여러 기기가 붙어 있을 수 있으므로
+     * 집합으로 다뤄, 새로 붙은 기기마다 트리거한다 — 워치가 상시 연결돼 있어도
+     * 이어폰 연결을 놓치지 않는다(실측: 워치만 잡혀 버즈가 가려졌다).
+     *
+     * ACL_CONNECTED 는 연결되는 **순간**에만 오는 브로드캐스트라, 앱을 설치하기
+     * 전부터 이어폰이 연결돼 있으면 영원히 오지 않는다(실측으로 확인: 리시버가
+     * 한 번도 동작하지 않았고 bt_event 가 비어 있었다). 폴링이 그 공백을 메운다.
+     *
+     * 서비스가 막 떴을 때 이미 연결돼 있던 것은 트리거로 보지 않는다 —
+     * 그건 "방금 연결했다"가 아니라 "원래 연결돼 있었다"이기 때문이다.
+     */
+    private suspend fun pollBluetooth() {
+        val now = connectedDevices()
+        if (now == btConnected) return
+        val added = now - btConnected
+        val removed = btConnected - now
+        val first = !btInitialized
+        btInitialized = true
+        btConnected = now
+
+        if (first) {
+            // 시작 시점의 상태는 기록만 하고 트리거하지 않는다 —
+            // "방금 연결했다"가 아니라 "원래 연결돼 있었다"이기 때문이다.
+            now.forEach { BtState.update(it, true) }
+            Log.i(TAG, "BT 초기 상태: ${now.joinToString().ifEmpty { "연결 없음" }}")
+            return
+        }
+        for (name in added) {
+            Log.i(TAG, "BT 연결 감지: $name")
+            PatternWatcher.onBluetooth(applicationContext, true, name)
+        }
+        for (name in removed) {
+            Log.i(TAG, "BT 해제 감지: $name")
+            PatternWatcher.onBluetooth(applicationContext, false, name)
+        }
+    }
+
+    /** 지금 연결된 기기 이름들. 본딩 목록에서 실제 연결 여부를 묻는다. */
+    private fun connectedDevices(): Set<String> = runCatching {
+        val bm = getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
+        val adapter = bm.adapter ?: return emptySet()
+        if (!adapter.isEnabled) return emptySet()
+        val names = HashSet<String>()
+        bm.getConnectedDevices(android.bluetooth.BluetoothProfile.GATT)
+            .mapNotNullTo(names) { it.name }
+        // GATT 는 LE 기기만 잡는다. 클래식 오디오(이어버즈)는 본딩 목록에
+        // isConnected 를 물어야 보인다 — 공개 API 가 없어 리플렉션을 쓴다.
+        adapter.bondedDevices?.forEach { d ->
+            val connected = runCatching {
+                d.javaClass.getMethod("isConnected").invoke(d) as? Boolean == true
+            }.getOrDefault(false)
+            if (connected) d.name?.let { names.add(it) }
+        }
+        names
+    }.getOrDefault(emptySet())
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 

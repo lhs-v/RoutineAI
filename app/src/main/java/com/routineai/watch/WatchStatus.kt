@@ -59,6 +59,7 @@ object WatchStatus {
             )
         }
         lines += Line("지금 맥락", bucket)
+        lines += Line("연결된 기기", BtState.connectedDevice() ?: "없음")
 
         // 제안별로 왜 대기 중인지
         for (p in proposals.filter { it.state !in setOf("dismissed") }.take(6)) {

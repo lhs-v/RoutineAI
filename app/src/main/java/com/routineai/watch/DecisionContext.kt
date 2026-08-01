@@ -82,13 +82,16 @@ object DecisionContext {
     }
 }
 
-/** BT 연결 상태를 리시버가 갱신해 두는 자리. 시스템에 물을 공개 경로가 없다. */
+/** 지금 붙어 있는 BT 기기. 리시버와 감시 서비스가 함께 갱신한다. */
 object BtState {
-    @Volatile private var connected: String? = null
+    private val connected = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun update(name: String, isConnected: Boolean) {
-        connected = if (isConnected) name else null
+        if (isConnected) connected.add(name) else connected.remove(name)
     }
 
-    fun connectedDevice(): String? = connected
+    /** 맥락 기록용 대표 기기. 여러 개면 이름 순으로 하나. */
+    fun connectedDevice(): String? = synchronized(connected) { connected.minOrNull() }
+
+    fun all(): Set<String> = synchronized(connected) { connected.toSet() }
 }

@@ -59,8 +59,16 @@ class PatternAccessibilityService : AccessibilityService() {
         @Volatile
         private var instance: PatternAccessibilityService? = null
 
-        fun toggleSplitScreen(): Boolean =
+        /**
+         * 분할화면 토글.
+         *
+         * 실측: 삼성 One UI 는 이 전역 동작을 거부한다(a11y 는 붙어 있는데
+         * false 반환). 화면이 좁아서인지 기기 정책인지는 반환값만으로 알 수
+         * 없어, 호출부가 실패를 그대로 받아 순차 실행으로 떨어지게 한다.
+         */
+        fun toggleSplitScreen(): Boolean = runCatching {
             instance?.performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) ?: false
+        }.getOrDefault(false)
 
         fun isConnected(): Boolean = instance != null
 
