@@ -67,6 +67,7 @@ import androidx.health.connect.client.PermissionController
 import com.routineai.collect.HealthCollector
 import com.routineai.data.ProposalRow
 import com.routineai.interpret.ProposalEngine
+import com.routineai.watch.Applier
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
@@ -157,6 +158,9 @@ class MainActivity : ComponentActivity() {
             ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
         }
+        val overlayOk = remember(permTick) { Applier.hasOverlay(ctx) }
+        val a11yOk = remember(permTick) { Applier.hasAccessibility(ctx) }
+        val writeOk = remember(permTick) { android.provider.Settings.System.canWrite(ctx) }
         val btOk = remember(permTick) {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                 ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
@@ -298,6 +302,7 @@ class MainActivity : ComponentActivity() {
                         else -> SettingsTab(
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
                             btOk = btOk, healthOk = healthOk, prefs = prefs,
+                            overlayOk = overlayOk, a11yOk = a11yOk, writeOk = writeOk,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -603,7 +608,15 @@ class MainActivity : ComponentActivity() {
                 Section("감시 중 ${watching.size}", "패턴이 실시간으로 감지되면 제안됩니다.")
                 watching.forEach { p ->
                     ProposalCard(p,
-                        primary = "수락" to { decide(p, "accepted", "accepted") },
+                        // 수락은 곧 의도 확인이다 — 그 자리에서 한 번 실행해 보여주고,
+                        // 이후 같은 트리거가 오면 PatternWatcher 가 말없이 실행한다.
+                        primary = "수락하고 지금 적용" to {
+                            decide(p, "accepted", "accepted")
+                            val r = Applier.apply(ctx, p)
+                            android.widget.Toast.makeText(
+                                ctx, r.message, android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        },
                         secondary = "보지 않기" to { decide(p, "dismissed", "dismissed") })
                 }
             }
@@ -701,6 +714,7 @@ class MainActivity : ComponentActivity() {
     private fun SettingsTab(
         usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
         btOk: Boolean, healthOk: Boolean, busy: Boolean, prefs: Settings,
+        overlayOk: Boolean, a11yOk: Boolean, writeOk: Boolean,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
         onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
@@ -826,6 +840,43 @@ class MainActivity : ComponentActivity() {
             Text(
                 "권한을 켜고 돌아오면 이 화면이 자동으로 갱신됩니다.",
                 style = MaterialTheme.typography.bodySmall,
+            )
+
+            // ---- 1.5 실시간 제안 ----
+            Section(
+                "2. 실시간 제안",
+                "수락한 루틴을 그 순간에 실행하고, 후보 패턴이 감지되면 팝업으로 물어봅니다. " +
+                    "셋 다 꺼도 대시보드·제안 목록은 정상 동작합니다.",
+            )
+            PermCard(
+                title = "다른 앱 위에 표시",
+                required = false,
+                granted = overlayOk,
+                what = "패턴이 감지된 그 순간 제안 카드를 띄웁니다. 백그라운드에서 앱을 " +
+                    "여는 것도 이 권한이 있어야 허용됩니다.",
+                without = "실시간 팝업이 뜨지 않습니다.",
+                where = "아래 버튼 → RoutineAI 허용",
+                onClick = { Applier.overlaySettings(ctx) },
+            )
+            PermCard(
+                title = "접근성 — 앱 전환 감지",
+                required = false,
+                granted = a11yOk,
+                what = "앱이 바뀌는 순간을 즉시 감지합니다. 화면 내용은 읽지 않습니다 " +
+                    "(콘텐츠 조회 권한을 요청하지 않았습니다).",
+                without = "앱 실행 트리거와 앱 맥락 모드가 동작하지 않습니다.",
+                where = "설정 → 접근성 → 설치된 앱 → RoutineAI",
+                onClick = { Applier.accessibilitySettings(ctx) },
+            )
+            PermCard(
+                title = "시스템 설정 변경",
+                required = false,
+                granted = writeOk,
+                what = "앱 맥락 모드가 자동 회전 같은 설정을 바꿉니다. 그 앱에서 나오면 " +
+                    "곧바로 원래대로 되돌립니다.",
+                without = "모드 제안이 안내로만 남습니다.",
+                where = "아래 버튼 → RoutineAI 허용",
+                onClick = { Applier.writeSettings(ctx) },
             )
 
             // ---- 2. 수집 ----

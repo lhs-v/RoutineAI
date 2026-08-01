@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">RoutineAI</string>
+    <string name="accessibility_desc">앱 전환을 감지해 수락한 루틴을 실시간으로 제안·실행합니다. 화면 내용은 읽지 않습니다.</string>
 </resources>

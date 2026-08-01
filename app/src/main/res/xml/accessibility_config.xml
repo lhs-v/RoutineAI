@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 창 전환 이벤트만 받는다. 화면 내용 읽기(canRetrieveWindowContent)는 켜지 않는다 —
+     필요한 것은 "어떤 앱이 앞에 왔는가"뿐이다. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_desc" />

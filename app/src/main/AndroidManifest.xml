@@ -22,6 +22,17 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- 실시간 제안 팝업. 다른 앱 위에 카드 하나를 띄우는 데 필요합니다. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 앱 맥락 모드(유튜브 중 자동 회전 등)가 시스템 설정을 바꾸는 데 필요합니다.
+         앱이 꺼지면 원복합니다. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- 방해금지 모드 켜고 끄기 (앱 맥락 모드용) -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
     <!-- 인터넷은 LLM 해석 기능을 켰을 때만 사용합니다. 끄면 완전히 오프라인으로 동작합니다. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -71,6 +82,21 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+
+        <!-- 앱 전환을 즉시 감지해 제안 트리거를 매칭한다. 화면 내용은 읽지 않는다
+             (이벤트 종류를 windowStateChanged 로 제한, 콘텐츠 접근 플래그 없음). -->
+        <service
+            android:name=".watch.PatternAccessibilityService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_config" />
+        </service>
 
         <!-- 알림 통계용. 사용자가 '알림 접근'에서 직접 허용해야 동작합니다. -->
         <service

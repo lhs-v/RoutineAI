@@ -47,6 +47,9 @@ class BtReceiver : BroadcastReceiver() {
         scope.launch {
             try {
                 Db.get(ctx).dao().insertBt(row)
+                // 수집만 하는 게 아니라 그 순간의 제안 트리거이기도 하다.
+                com.routineai.watch.PatternWatcher
+                    .onBluetooth(ctx.applicationContext, action == "connect", name)
             } finally {
                 pending.finish()
             }
