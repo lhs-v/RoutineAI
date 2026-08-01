@@ -87,7 +87,9 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val liveNotifs = notifs.filter { !it.ongoing }
             .groupBy { it.pkg to it.channel }
             .flatMap { (_, group) ->
-                var lastKept = Long.MIN_VALUE
+                // 초기값이 Long.MIN_VALUE 면 ts - lastKept 가 넘쳐 음수가 되어
+                // 전부 버려진다. ts 는 epoch ms 라 0 이면 첫 건이 항상 살아남는다.
+                var lastKept = 0L
                 group.sortedBy { it.ts }.filter { n ->
                     val keep = n.ts - lastKept >= NOTIF_REPOST_WINDOW_MS
                     if (keep) lastKept = n.ts else repostsCollapsed++
