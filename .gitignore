@@ -23,3 +23,6 @@ app/src/main/assets/demo/routine.db
 
 # 삼성 루틴 공유 파일. 포맷 분석용으로만 받았고 저장소에 두지 않는다.
 *.rtn
+
+# 발표 자료 — 실사용 패턴 요약이 담겨 공개 저장소에 올리지 않는다
+docs/*.pptx
