@@ -197,6 +197,8 @@ class Interpreter(private val ctx: Context) {
         appendLine("- 관측일수가 적은 지표는 결론 등급을 낮추세요.")
         appendLine("- 장소는 'Wi-Fi A' 같은 별칭으로만 주어집니다. 실제 장소를 추정하지 마세요.")
         appendLine("- coUse 는 전환이 아니라 분할화면 동시 사용입니다. 혼동하지 마세요.")
+        appendLine("- netApps 는 통신량이지 사용 시간이 아닙니다. 화면이 꺼진 동안의 백그라운드")
+        appendLine("  트래픽이 섞여 있으므로, 모바일 비율은 '밖에서 쓰는 앱'의 신호로만 쓰세요.")
         appendLine("- 알림의 앱별 집계는 두 개입니다. notifByApp 은 리스너 도착 기준(권한을 켠 뒤부터,")
         appendLine("  미디어 재생 갱신이 섞여 부풀 수 있음), notifByAppInterrupt 는 시스템 알림 이벤트")
         appendLine("  기준(며칠 소급, 더 보수적)입니다. 앱 이름을 보고 정기·시스템성 알림과 사람이")

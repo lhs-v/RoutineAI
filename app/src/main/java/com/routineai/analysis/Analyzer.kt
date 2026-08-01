@@ -80,7 +80,20 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
 
         // ---- 일별 지표 ----
         val sessByDate = sessions.groupBy { it.start.toLocalDate() }
+        // 같은 알림의 재게시(미디어 진행률 갱신 등)를 도착 1건으로 접는다.
+        // 리스너가 key 로 걸러내기 전에 쌓인 행에는 이게 섞여 있고,
+        // key 는 저장하지 않으므로 (앱, 채널) 5초 창으로 근사한다.
+        var repostsCollapsed = 0
         val liveNotifs = notifs.filter { !it.ongoing }
+            .groupBy { it.pkg to it.channel }
+            .flatMap { (_, group) ->
+                var lastKept = Long.MIN_VALUE
+                group.sortedBy { it.ts }.filter { n ->
+                    val keep = n.ts - lastKept >= NOTIF_REPOST_WINDOW_MS
+                    if (keep) lastKept = n.ts else repostsCollapsed++
+                    keep
+                }
+            }
         val notifByDate = liveNotifs.groupBy { it.ts.toLocalDate() }
         // 리스너는 권한을 켠 뒤부터만 기록된다. 그 이전 날을 평균에 넣으면
         // 알림 수가 실제보다 낮게 나오므로 날짜마다 표시해 둔다.
@@ -157,6 +170,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 daysUsed = used,
                 launchesPerDay = launches.r2(),
                 secondsPerLaunch = if (launches > 0) (vals.sum() * 60 / launches / nFull).r2() else 0.0,
+                dailyMinutes = vals.map { it.r2() },
             )
         }.sortedByDescending { it.meanMinutes }
 
@@ -194,10 +208,23 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             )
         }.sortedByDescending { it.count }.take(12)
 
-        // ---- 첫 앱 / 세션당 앱 개수 ----
+        // ---- 첫 앱 / 마지막 앱 / 세션당 앱 개수 ----
         val first = sessions.mapNotNull { it.apps(launcher).firstOrNull() }
             .groupingBy { it }.eachCount()
             .entries.sortedByDescending { it.value }.take(10)
+            .map { CountStat(label(it.key), it.value.toDouble()) }
+
+        val lastApps = sessions.mapNotNull { it.apps(launcher).lastOrNull() }
+            .groupingBy { it }.eachCount()
+            .entries.sortedByDescending { it.value }.take(10)
+            .map { CountStat(label(it.key), it.value.toDouble()) }
+
+        // 아침 세션의 진입점. 기상 직후 고정 동작(결제·교통카드 등)이 여기서 보인다.
+        val morningFirst = sessions
+            .filter { it.start.toLocalDateTime().hour in 5..8 }
+            .mapNotNull { it.apps(launcher).firstOrNull() }
+            .groupingBy { it }.eachCount()
+            .entries.sortedByDescending { it.value }.take(8)
             .map { CountStat(label(it.key), it.value.toDouble()) }
 
         val sessionAppCount = sessions.groupingBy {
@@ -233,8 +260,12 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val places = places(netChanges, now)
 
         onStep("외출 지표 계산 중")
-        val netBuckets = dao.net(now - 200L * 24 * 60 * 60 * 1000, now)
+        // 다른 지표와 같은 창으로 조회한다. 통신량은 몇 달 소급되지만,
+        // 지표마다 관측 창이 다르면 해석할 때마다 기간을 따로 밝혀야 한다.
+        val netBuckets = dao.net(from, now)
         val outing = outing(netBuckets)
+        val netApps = netApps(netBuckets)
+        val outingHour = outingByHour(netBuckets)
         val outingWd = outing.groupBy { it.weekday }.map { (wd, list) ->
             WeekdayOuting(
                 weekday = wd,
@@ -311,9 +342,10 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
             transitions = transitions, coUse = coUse, firstApps = first,
             notifByApp = notifByApp, notifByAppInterrupt = notifByAppInterrupt,
+            lastApps = lastApps, morningFirstApps = morningFirst,
             sessionAppCount = sessionAppCount,
-            places = places, timeFixed = timeFixed,
-            outing = outing, outingByWeekday = outingWd,
+            places = places, timeFixed = timeFixed, netApps = netApps,
+            outing = outing, outingByWeekday = outingWd, outingByHour = outingHour,
             quality = Quality(
                 screenMinutesFromSessions = screenFromSessions.r2(),
                 screenMinutesFromApps = screenFromApps.r2(),
@@ -347,6 +379,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 sessionsBuilt = sessions.size,
                 sessionSource = s.source,
                 storedNotifs = notifs.size,
+                notifRepostsCollapsed = repostsCollapsed,
                 systemInterruptEvents = raw.count { it.type == EVENT_NOTIFICATION_INTERRUPTION },
                 notifListenerSince = notifSince,
                 netChangeRecords = netChanges.size,
@@ -493,6 +526,52 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             }.sortedBy { it.date }
     }
 
+    /**
+     * 앱별 통신량. uid 를 패키지로 되돌려 이름을 붙인다.
+     * 삭제된 앱·시스템 uid 는 되돌릴 수 없어 "uid1234" 로 남긴다.
+     */
+    private fun netApps(rows: List<com.routineai.data.NetBucketRow>): List<NetAppStat> {
+        if (rows.isEmpty()) return emptyList()
+        val byUid = HashMap<Int, LongArray>()   // [모바일, 전체]
+        for (r in rows) {
+            val a = byUid.getOrPut(r.uid) { LongArray(2) }
+            val b = r.rxBytes + r.txBytes
+            if (r.transport == NetworkCollector.TRANSPORT_MOBILE) a[0] += b
+            a[1] += b
+        }
+        return byUid.entries.sortedByDescending { it.value[1] }.take(10).map { (uid, v) ->
+            val pkg = runCatching { pm.getPackagesForUid(uid)?.firstOrNull() }.getOrNull()
+            NetAppStat(
+                label = pkg?.let { label(it) } ?: "uid$uid",
+                totalMb = (v[1].toDouble() / 1_000_000).r2(),
+                mobilePct = if (v[1] > 0) (v[0].toDouble() / v[1] * 100).r2() else 0.0,
+            )
+        }
+    }
+
+    /**
+     * 시간대별 모바일 우세율. 요일 축과 달리 하루 안의 출입 경계가 보인다.
+     * 버킷 시작 시각 기준이므로 시간대 눈금은 기기 표준시로 환산한 값이다.
+     */
+    private fun outingByHour(rows: List<com.routineai.data.NetBucketRow>): List<HourOuting> {
+        if (rows.isEmpty()) return emptyList()
+        val cell = HashMap<Pair<LocalDate, Int>, LongArray>()   // [모바일, Wi-Fi]
+        for (r in rows) {
+            val ldt = r.bucketStart.toLocalDateTime()
+            val key = ldt.toLocalDate() to ldt.hour
+            cell.getOrPut(key) { LongArray(2) }[r.transport] += r.rxBytes + r.txBytes
+        }
+        return cell.entries.groupBy { it.key.second }
+            .map { (hour, list) ->
+                val mobile = list.count { it.value[0] > it.value[1] }
+                HourOuting(
+                    hour = hour,
+                    mobileShare = (mobile.toDouble() / list.size * 100).r2(),
+                    days = list.size,
+                )
+            }.sortedBy { it.hour }
+    }
+
     // ------------------------------------------------------------------
 
     private fun resolveLauncher(): String {
@@ -549,6 +628,9 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
 private const val EVENT_NOTIFICATION_INTERRUPTION = 12
 
 private const val BUCKET_MS = 2L * 60 * 60 * 1000
+
+/** 같은 (앱, 채널) 알림이 이 간격 안에 다시 오면 재게시로 본다 */
+private const val NOTIF_REPOST_WINDOW_MS = 5_000L
 private val WEEKDAY_ORDER = listOf("월", "화", "수", "목", "금", "토", "일")
 
 // ---- 작은 통계 헬퍼 ----

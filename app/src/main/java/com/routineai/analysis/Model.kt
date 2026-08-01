@@ -28,11 +28,23 @@ data class Report(
      * 정기·시스템성 알림과 사람이 응답해야 하는 알림을 구분할 수 있다.
      */
     val notifByAppInterrupt: List<CountStat>,
+    /** 화면을 끄기 직전 마지막으로 쓴 앱. [firstApps] 의 반대쪽 끝. */
+    val lastApps: List<CountStat>,
+    /** 아침(05~09시) 세션에서 처음 연 앱. 하루의 진입점을 보기 위한 것. */
+    val morningFirstApps: List<CountStat>,
     val sessionAppCount: List<CountStat>,
     val places: List<PlaceStat>,
     val timeFixed: List<TimeFixedStat>,
+    /**
+     * 앱별 통신량. 기기가 통신했다는 것이지 사람이 썼다는 뜻이 아니다 —
+     * 화면이 꺼진 동안의 백그라운드 트래픽이 섞여 있다.
+     * 모바일 비율이 높은 앱은 Wi-Fi 밖(외출 중)에서 쓰는 앱이라는 신호다.
+     */
+    val netApps: List<NetAppStat>,
     val outing: List<OutingStat>,
     val outingByWeekday: List<WeekdayOuting>,
+    /** 시간대별로 모바일이 우세했던 날의 비율. 하루의 출입 경계가 보인다. */
+    val outingByHour: List<HourOuting>,
     val quality: Quality,
     val diagnostics: Diagnostics,
 )
@@ -57,6 +69,12 @@ data class Diagnostics(
     /** "screen_events" = 화면 이벤트로 세션 구성, "activity_gap" = 앱 전환 간격으로 대체 */
     val sessionSource: String,
     val storedNotifs: Int,
+    /**
+     * 같은 알림의 재게시로 보고 접은 행 수.
+     * 리스너가 key 로 걸러내기 전에 쌓인 기록에는 미디어 진행률 갱신 등이
+     * 도착으로 남아 있어, 집계 때 (앱, 채널) 5초 창으로 접는다.
+     */
+    val notifRepostsCollapsed: Int,
     /** 이 기기가 usagestats 로 NOTIFICATION_INTERRUPTION 을 내주는가 (0 이면 안 줌) */
     val systemInterruptEvents: Int,
     /** 알림 리스너가 처음 기록을 남긴 시각. 이 이전은 알림 데이터가 없다. */
@@ -117,6 +135,12 @@ data class AppStat(
     val daysUsed: Int,
     val launchesPerDay: Double,
     val secondsPerLaunch: Double,
+    /**
+     * 온전한 날짜별 사용 시간(분), meta.fullDays 와 같은 순서.
+     * 요약 통계만으로는 궤적을 볼 수 없어서 원본 배열을 함께 싣는다 —
+     * 해석하는 쪽이 "매일 비슷했는가, 하루가 튀었는가"를 직접 확인할 수 있다.
+     */
+    val dailyMinutes: List<Double>,
 )
 
 @Serializable
@@ -173,6 +197,22 @@ data class OutingStat(
     /** 낮 버킷 중 모바일이 우세했던 비율 (0~100) */
     val mobileShare: Double,
     val bucketsObserved: Int,
+)
+
+@Serializable
+data class NetAppStat(
+    val label: String,
+    val totalMb: Double,
+    /** 그중 모바일(이동통신) 비율 0~100 */
+    val mobilePct: Double,
+)
+
+/** 그 시간대(2시간 버킷 시작 시각)에 모바일이 우세했던 날의 비율 */
+@Serializable
+data class HourOuting(
+    val hour: Int,
+    val mobileShare: Double,
+    val days: Int,
 )
 
 @Serializable
