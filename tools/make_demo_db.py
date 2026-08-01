@@ -156,6 +156,64 @@ def backfill(buckets):
     return con
 
 
+def backfill_bt(adb_path):
+    """
+    dumpsys bluetooth_manager 의 연결 이력을 bt_event 로 변환한다.
+
+    시스템 링버퍼라 대개 하루 이틀치만 남아 있다 — 있는 만큼만 넣는다.
+    같은 순간의 connectionStateChanged 가 프로필 로그마다(A2DP·HFP·LE)
+    중복 출력되므로 (초, 기기, 상태) 로 접는다. MAC 꼬리는 본딩 목록의
+    이름으로 되돌리고 MAC 자체는 저장하지 않는다.
+    """
+    out = subprocess.run([adb_path, "shell", "dumpsys", "bluetooth_manager"],
+                         capture_output=True)
+    text = out.stdout.decode(errors="replace")
+    if out.returncode != 0 or len(text) < 1000:
+        print("bluetooth_manager 덤프 실패 — BT 백필 건너뜀")
+        return
+
+    # 본딩 목록에서 MAC 꼬리(뒤 5자) -> 이름
+    names = {}
+    # 이름은 줄 마지막 ']' 뒤에 온다 — 탐욕 매칭으로 마지막 ']' 까지 소비해야
+    # "[DUAL] [ACL ...] 이름" 에서 브래킷 노이즈가 이름에 섞이지 않는다.
+    for m in re.finditer(
+        r"XX:XX:XX:XX:([0-9A-F]{2}:[0-9A-F]{2})\(Public \)[^\n]*\]\s+([^\n|]+?)\s*$",
+        text, re.M,
+    ):
+        name = m.group(2).strip()
+        if name and not name.startswith("XX:"):
+            names.setdefault(m.group(1), name)
+
+    year = datetime.datetime.now(KST).year
+    rows = {}
+    for m in re.finditer(
+        r"(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.\d+ connectionStateChanged: "
+        r"device: XX:XX:XX:XX:([0-9A-F]{2}:[0-9A-F]{2}).*toState: STATE_(CONNECTED|DISCONNECTED)\b",
+        text,
+    ):
+        mo, d, h, mi, s, tail, state = m.groups()
+        dt = datetime.datetime(year, int(mo), int(d), int(h), int(mi), int(s), tzinfo=KST)
+        ts = int(dt.timestamp() * 1000)
+        action = "connect" if state == "CONNECTED" else "disconnect"
+        rows[(ts // 1000, tail, action)] = (
+            ts, action, names.get(tail, "기기(" + tail[-2:] + ")"), 0)
+
+    con = sqlite3.connect(ASSET)
+    # 재실행 대비: 이미 있는 (ts, action, name) 은 다시 넣지 않는다.
+    seen = set(con.execute("SELECT ts, action, name FROM bt_event").fetchall())
+    fresh = [r for r in sorted(rows.values()) if (r[0], r[1], r[2]) not in seen]
+    existing = len(seen)
+    con.executemany(
+        "INSERT INTO bt_event (ts, action, name, majorClass) VALUES (?,?,?,?)", fresh)
+    con.commit(); con.close()
+    if rows:
+        lo = min(r[0] for r in rows.values()); hi = max(r[0] for r in rows.values())
+        print(f"BT 백필: {len(rows)}행 ({kst(lo):%m-%d %H:%M} ~ {kst(hi):%m-%d %H:%M}, "
+              f"기존 {existing}행) — 시스템 버퍼가 짧아 하루 안팎만 남는다")
+    else:
+        print("BT 이력 없음")
+
+
 def trim_to_events(con):
     """모든 축의 시작점을 사용 이벤트의 시작점으로 통일한다.
 
@@ -226,3 +284,4 @@ if __name__ == "__main__":
     if not args.keep_history:
         trim_to_events(con)
     verify(con)
+    backfill_bt(a or adb())
