@@ -153,6 +153,23 @@ data class ProposalRow(
      */
     val conditionHours: String? = null,
     val conditionWeekdays: String? = null,
+
+    /**
+     * 심층 분석이 결정 이력을 읽고 남긴 한 문장 — 무엇을 근거로 무엇을
+     * 바꿨는지. 사용자에게 그대로 보여준다. "내 반응이 뭔가를 바꿨다"를
+     * 문장으로 증명하는 자리다.
+     */
+    val insight: String? = null,
+
+    /**
+     * 심층 분석의 자동 실행 승격 추천. 추천만 한다 — 실제 승격은 언제나
+     * 사용자가 스위치로 한다. 앱이 저절로 켜면 "왜 열렸지"를 겪게 된다.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val suggestAutoRun: Boolean = false,
+
+    /** 마지막 심층 분석 시각. null 이면 아직 정제 전 */
+    val refinedAt: Long? = null,
 )
 
 /**

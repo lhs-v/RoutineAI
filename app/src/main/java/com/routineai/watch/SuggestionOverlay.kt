@@ -211,7 +211,9 @@ object SuggestionOverlay {
     }
 
     private fun primaryLabel(p: ProposalRow): String = when (p.actionType) {
-        "app_pair" -> "분할화면으로 열기"
+        // 삼성이 분할 토글을 막는 것을 실측으로 확인 — 약속을 지킬 수 있는
+        // 문구로 쓴다. 분할이 되면 결과 메시지가 알려준다.
+        "app_pair" -> "두 앱 함께 열기"
         "launch_app" -> "지금 열기"
         "notif_channel_off" -> "알림 정리하기"
         else -> "적용"

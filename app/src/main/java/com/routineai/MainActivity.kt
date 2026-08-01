@@ -65,7 +65,11 @@ import com.routineai.analysis.Report
 import androidx.compose.foundation.clickable
 import androidx.health.connect.client.PermissionController
 import com.routineai.collect.HealthCollector
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import com.routineai.data.ProposalRow
+import com.routineai.data.RunStat
+import com.routineai.interpret.DeepAnalyzer
 import com.routineai.interpret.ProposalEngine
 import com.routineai.watch.Applier
 import com.routineai.watch.SuggestionOverlay
@@ -209,7 +213,7 @@ class MainActivity : ComponentActivity() {
                 StatusHeader(status, usageOk, demo)
 
                 TabRow(selectedTabIndex = tab) {
-                    listOf("대시보드", "제안", "설정").forEachIndexed { i, t ->
+                    listOf("대시보드", "제안", "루틴", "설정").forEachIndexed { i, t ->
                         Tab(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -218,7 +222,7 @@ class MainActivity : ComponentActivity() {
                                     Text(t)
                                     // 설정 탭에만 표시한다. 필수 권한이 꺼졌으면 빨강,
                                     // 해석 연결이 비었으면 노랑.
-                                    if (i == 2 && (!usageOk || !azure.isComplete)) {
+                                    if (i == 3 && (!usageOk || !azure.isComplete)) {
                                         Spacer(Modifier.size(5.dp))
                                         Dot(if (!usageOk) NEED else WARN)
                                     }
@@ -244,7 +248,7 @@ class MainActivity : ComponentActivity() {
                         0 -> DashboardTab(
                             usageOk = usageOk || demo, busy = busy, msg = reportMsg,
                             reportJson = reportJson, reportAt = reportAt, demo = demo,
-                            onGoSettings = { tab = 2 },
+                            onGoSettings = { tab = 3 },
                             onBuild = {
                                 busy = true; step = "시작하는 중"
                                 lifecycleScope.launch {
@@ -278,7 +282,7 @@ class MainActivity : ComponentActivity() {
                         1 -> ProposalsTab(
                             busy = busy, azure = azure, prefs = prefs,
                             refreshTick = proposalsTick,
-                            onGoSettings = { tab = 2 },
+                            onGoSettings = { tab = 3 },
                             onChanged = { proposalsTick++ },
                             onAnalyze = {
                                 busy = true; step = "분석 시작"
@@ -302,6 +306,39 @@ class MainActivity : ComponentActivity() {
                                                 System.currentTimeMillis()
                                             )
                                         )
+                                    }
+                                    proposalsTick++
+                                    busy = false; step = ""
+                                }
+                            },
+                        )
+
+                        2 -> RoutineTab(
+                            busy = busy, azure = azure, prefs = prefs,
+                            refreshTick = proposalsTick,
+                            onGoProposals = { tab = 1 },
+                            onGoSettings = { tab = 3 },
+                            onChanged = { proposalsTick++ },
+                            onRefine = {
+                                busy = true; step = "심층 분석 시작"
+                                lifecycleScope.launch {
+                                    val res = withContext(Dispatchers.Default) {
+                                        DeepAnalyzer(ctx).refine(azure) { s ->
+                                            lifecycleScope.launch { step = s }
+                                        }
+                                    }
+                                    res.onSuccess { o ->
+                                        prefs.lastBrief = o.brief
+                                        prefs.lastBriefAt = System.currentTimeMillis()
+                                        prefs.lastRefineNote = buildString {
+                                            append("정제 ${o.refined}건")
+                                            if (o.skipped > 0) append(" · 건너뜀 ${o.skipped}건")
+                                            if (o.analysisNote.isNotBlank()) {
+                                                appendLine(); append(o.analysisNote)
+                                            }
+                                        }
+                                    }.onFailure { e ->
+                                        prefs.lastRefineNote = "심층 분석 실패: ${e.message}"
                                     }
                                     proposalsTick++
                                     busy = false; step = ""
@@ -833,6 +870,343 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     /**
+     * 루틴 탭 — 수락 이후의 세계.
+     *
+     * 제안 탭이 후보를 심사하는 곳이라면 여기는 수락한 루틴이 사는 곳이다.
+     * 삼성 루틴 허브와 Now Brief 에 실리는 게 최종 그림이지만 그 등록 API 는
+     * 공개돼 있지 않다 — 그래서 "실렸다면 이렇게 보인다"를 이 화면이 대신
+     * 보여주고, 실제 데이터(실행 횟수·결정 이력·정제 조건)로 채운다.
+     */
+    @Composable
+    private fun RoutineTab(
+        busy: Boolean, azure: AzureConfig, prefs: Settings, refreshTick: Int,
+        onRefine: () -> Unit, onChanged: () -> Unit,
+        onGoProposals: () -> Unit, onGoSettings: () -> Unit,
+    ) {
+        val ctx = LocalContext.current
+        var proposals by remember { mutableStateOf<List<ProposalRow>>(emptyList()) }
+        var runs by remember { mutableStateOf<Map<String, RunStat>>(emptyMap()) }
+        var hasHistory by remember { mutableStateOf(false) }
+        LaunchedEffect(refreshTick) {
+            withContext(Dispatchers.IO) {
+                val dao = Db.get(ctx).dao()
+                proposals = dao.proposals()
+                runs = dao.runStats().associateBy { it.signature }
+                hasHistory = DeepAnalyzer(ctx).hasHistory()
+            }
+        }
+        val accepted = proposals.filter { it.state == "accepted" }
+        val accent = Color(prefs.accentColor())
+
+        Column(
+            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            NowBriefCard(prefs, accepted, runs, accent)
+
+            // ---- 심층 분석 ----
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    enabled = azure.isComplete && !busy && hasHistory,
+                    onClick = onRefine,
+                ) { Text("심층 분석") }
+                Spacer(Modifier.size(10.dp))
+                if (prefs.lastBriefAt > 0L) {
+                    Text(
+                        "마지막 분석 ${fmt(prefs.lastBriefAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                when {
+                    !azure.isComplete -> "설정 탭에서 해석 연결을 채우면 쓸 수 있습니다."
+                    !hasHistory ->
+                        "수락·거절이 쌓이면 그 순간의 맥락(시각·요일·연결 기기)을 읽어 " +
+                            "조건을 좁힙니다. 아직 결정 이력이 없습니다."
+                    else ->
+                        "수락·거절 순간의 맥락을 보내 조건을 좁힙니다. " +
+                            "결정 이력이 곧 의도의 근거가 됩니다."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!azure.isComplete) {
+                OutlinedButton(onClick = onGoSettings) { Text("설정 탭으로") }
+            }
+
+            // ---- 루틴 허브 ----
+            Section(
+                "내 루틴 ${accepted.size}",
+                "수락한 루틴입니다. 삼성 루틴 허브에 실린다면 이런 모습입니다.",
+            )
+            if (accepted.isEmpty()) {
+                Text(
+                    "아직 수락한 루틴이 없습니다. 제안 탭에서 수락하면 여기 모입니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = onGoProposals) { Text("제안 탭으로") }
+            }
+            accepted.forEach { p ->
+                HubCard(p, runs[p.signature], accent, onChanged)
+            }
+
+            // ---- 정제 노트 ----
+            if (prefs.lastRefineNote.isNotBlank()) {
+                HorizontalDivider()
+                var open by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { open = !open }) {
+                    Text(if (open) "정제 노트 접기" else "정제 노트 보기")
+                }
+                if (open) {
+                    Text(prefs.lastRefineNote, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(40.dp))
+        }
+    }
+
+    /**
+     * Now Brief 자리의 미리보기.
+     *
+     * 심층 분석이 만든 브리핑이 있으면 그걸, 없으면 로컬 집계 요약을 싣는다.
+     * 시스템 UI 처럼 보이게 어두운 카드로 구분한다 — 앱의 다른 카드와 같은
+     * 모양이면 "Now Brief 에 실린다"는 그림이 전달되지 않는다.
+     */
+    @Composable
+    private fun NowBriefCard(
+        prefs: Settings, accepted: List<ProposalRow>, runs: Map<String, RunStat>, accent: Color,
+    ) {
+        val hour = remember { java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) }
+        val greeting = when (hour) {
+            in 5..10 -> "좋은 아침이에요"
+            in 11..17 -> "좋은 오후예요"
+            in 18..21 -> "좋은 저녁이에요"
+            else -> "늦은 시간이네요"
+        }
+        val totalRuns = accepted.sumOf { runs[it.signature]?.cnt ?: 0 }
+        val body = prefs.lastBrief.ifBlank {
+            if (accepted.isEmpty())
+                "아직 지켜보는 루틴이 없어요. 제안을 수락하면 그 순간부터 여기에 하루가 요약됩니다."
+            else
+                "수락한 루틴 ${accepted.size}개를 지켜보고 있어요" +
+                    (if (totalRuns > 0) " — 지금까지 ${totalRuns}번 대신 움직였어요." else ".") +
+                    " 심층 분석을 돌리면 결정 이력을 읽은 맞춤 브리핑이 실립니다."
+        }
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF17141F)),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(7.dp).clip(CircleShape).background(accent)
+                    )
+                    Spacer(Modifier.size(7.dp))
+                    Text(
+                        "나우 브리프",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xB3FFFFFF),
+                    )
+                }
+                Text(greeting, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xCCFFFFFF),
+                )
+                Text(
+                    "Now Brief 연동 API 는 공개돼 있지 않아 미리보기로 보여드립니다.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0x66FFFFFF),
+                )
+            }
+        }
+    }
+
+    /** 루틴 허브 카드 한 장 — 트리거·실행 이력·정제 결과·승격 스위치. */
+    @Composable
+    private fun HubCard(
+        p: ProposalRow, run: RunStat?, accent: Color, onChanged: () -> Unit,
+    ) {
+        val ctx = LocalContext.current
+        var exportOpen by remember { mutableStateOf(false) }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Chip(CATEGORY_LABELS[p.category] ?: p.category)
+                    Spacer(Modifier.size(6.dp))
+                    if (p.autoRun) Chip("자동", OK)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (run != null) "실행 ${run.cnt}회 · ${ago(run.lastTs)}" else "아직 실행 전",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(p.oneLine, fontWeight = FontWeight.SemiBold)
+                Text(
+                    flowSummary(ctx, p),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                condLabel(p)?.let {
+                    Text(
+                        "조건: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // 심층 분석의 통찰 — "내 반응이 뭔가를 바꿨다"의 증거 자리.
+                p.insight?.let { insight ->
+                    Row(Modifier.fillMaxWidth()) {
+                        Box(
+                            Modifier.size(3.dp, 34.dp)
+                                .clip(RoundedCornerShape(2.dp)).background(accent)
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Column {
+                            Text(
+                                insight,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            p.refinedAt?.let {
+                                Text(
+                                    "심층 분석 · ${fmt(it)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (p.suggestAutoRun && !p.autoRun) {
+                    Notice(WARN, "심층 분석 추천: 거절 없이 수락만 이어져 자동 실행으로 올려도 좋겠습니다.")
+                }
+                var auto by remember(p.signature, p.autoRun) { mutableStateOf(p.autoRun) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("자동 실행", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (auto) "묻지 않고 바로 실행합니다"
+                            else "매번 원탭으로 여쭤봅니다",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = auto, onCheckedChange = { on ->
+                        auto = on
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            Db.get(ctx).dao().upsertProposal(p.copy(autoRun = on))
+                            withContext(Dispatchers.Main) { onChanged() }
+                        }
+                    })
+                }
+                Text(
+                    "삼성 루틴으로 보내기",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { exportOpen = true },
+                )
+            }
+        }
+        if (exportOpen) {
+            AlertDialog(
+                onDismissRequest = { exportOpen = false },
+                confirmButton = {
+                    TextButton(onClick = { exportOpen = false }) { Text("닫기") }
+                },
+                title = { Text("삼성 루틴으로 보내기") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "삼성 루틴에 등록된다면 이 조합입니다:",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "조건  ${p.samsungCondition ?: "(해당 ID 없음)"}\n" +
+                                "동작  ${p.samsungAction ?: "(해당 ID 없음)"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "루틴 등록 API 는 서드파티에 공개돼 있지 않아 실제 등록은 " +
+                                "되지 않습니다. 이 앱은 발견과 검증까지를 맡고, 등록은 " +
+                                "플랫폼이 열어줘야 하는 마지막 한 걸음입니다.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    /** "무엇이 일어나면 · 무엇을 한다"를 사람이 읽는 한 줄로. */
+    private fun flowSummary(ctx: Context, p: ProposalRow): String {
+        val params = runCatching {
+            Json.decodeFromString<List<String>>(p.actionParams)
+        }.getOrDefault(emptyList())
+        val t = when (p.triggerType) {
+            "bt_connect" -> "${p.triggerParam ?: "블루투스"} 연결되면"
+            "bt_disconnect" -> "${p.triggerParam ?: "블루투스"} 끊기면"
+            "wifi_connect" -> "${p.triggerParam ?: "Wi-Fi"} 연결되면"
+            "wifi_disconnect" -> "Wi-Fi 끊기면"
+            "app_launch" -> "${appLabel(ctx, p.triggerParam)} 열면"
+            "time" -> "${p.triggerParam ?: "정해진 시간"}에"
+            "exercise_start" -> "운동을 시작하면"
+            else -> p.triggerType
+        }
+        val a = when (p.actionType) {
+            "launch_app" -> "${appLabel(ctx, params.firstOrNull())} 열기"
+            "app_pair" -> params.joinToString("+") { appLabel(ctx, it) } + " 함께 열기"
+            "mode_rotation" -> "화면 회전 잠금"
+            "mode_eye_comfort" -> "편안하게 보기"
+            "mode_dnd" -> "방해 금지"
+            "notif_channel_off" -> "알림 정리"
+            else -> p.actionType
+        }
+        return "$t · $a"
+    }
+
+    private fun appLabel(ctx: Context, pkg: String?): String {
+        pkg ?: return "앱"
+        return runCatching {
+            val pm = ctx.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg.substringAfterLast('.'))
+    }
+
+    /** 정제된 조건을 사람이 읽는 표기로. 조건이 없으면 null. */
+    private fun condLabel(p: ProposalRow): String? {
+        if (p.conditionHours == null && p.conditionWeekdays == null) return null
+        val names = listOf("", "월", "화", "수", "목", "금", "토", "일")
+        fun day(n: String) = names.getOrElse(n.trim().toIntOrNull() ?: 0) { "?" }
+        val parts = mutableListOf<String>()
+        p.conditionWeekdays?.let { spec ->
+            parts += when (spec) {
+                "1-5" -> "평일"
+                "6-7" -> "주말"
+                else -> spec.split(',').joinToString(",") { part ->
+                    val r = part.trim().split('-')
+                    if (r.size == 2) "${day(r[0])}–${day(r[1])}" else day(part)
+                }
+            }
+        }
+        p.conditionHours?.let { spec ->
+            parts += spec.split(',').joinToString(", ") { part ->
+                val r = part.trim().split('-')
+                if (r.size == 2) "${r[0]}–${r[1]}시" else "${part.trim()}시"
+            }
+        }
+        return parts.joinToString(" ")
+    }
+
+    // ------------------------------------------------------------------
+
+    /**
      * 설정 탭.
      *
      * 권한 → 수집 → 해석 연결 순서로 둔다. 위에서부터 채우면 앱이 동작하도록
@@ -1143,6 +1517,11 @@ class MainActivity : ComponentActivity() {
                 onClick = {
                     lifecycleScope.launch {
                         withContext(Dispatchers.IO) { WatchStatus.resetProposals(ctx) }
+                        // 브리핑은 결정 이력에서 나온 것이라 이력과 함께 지워야
+                        // 근거 없는 브리핑이 남지 않는다.
+                        prefs.lastBrief = ""
+                        prefs.lastBriefAt = 0L
+                        prefs.lastRefineNote = ""
                         resetMsg = "제안과 결정 이력을 지웠습니다. 제안 탭에서 다시 분석하세요."
                         onChanged()
                     }

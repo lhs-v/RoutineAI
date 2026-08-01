@@ -68,6 +68,23 @@ class Settings(ctx: Context) {
         set(v) = sp.edit().putLong("last_report_at", v).apply()
 
     /**
+     * 심층 분석이 만든 Now Brief 문단. 루틴 탭 상단에 보인다.
+     * 비어 있으면 로컬 집계로 만든 요약이 대신 나간다.
+     */
+    var lastBrief: String
+        get() = sp.getString("last_brief", "").orEmpty()
+        set(v) = sp.edit().putString("last_brief", v).apply()
+
+    var lastBriefAt: Long
+        get() = sp.getLong("last_brief_at", 0L)
+        set(v) = sp.edit().putLong("last_brief_at", v).apply()
+
+    /** 심층 분석의 analysisNote — 루틴 탭 하단에 접혀 보인다. */
+    var lastRefineNote: String
+        get() = sp.getString("last_refine_note", "").orEmpty()
+        set(v) = sp.edit().putString("last_refine_note", v).apply()
+
+    /**
      * 데모 모드.
      *
      * 켜면 리포트를 이 기기의 기록이 아니라 assets 에 넣어둔 데모 로그로 만든다.
@@ -90,6 +107,9 @@ class Settings(ctx: Context) {
         lastReportAt = 0L
         lastAnalysisAt = 0L
         lastAnalysisNote = ""
+        lastBrief = ""
+        lastBriefAt = 0L
+        lastRefineNote = ""
     }
 
     fun azureConfig(): AzureConfig =

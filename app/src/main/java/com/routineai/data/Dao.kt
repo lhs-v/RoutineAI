@@ -106,9 +106,32 @@ interface UsageDao {
     )
     suspend fun decisions(sig: String): List<ProposalEventRow>
 
+    /**
+     * 심층 분석의 입력 — 결정과 실행의 전체 궤적.
+     * surfaced 를 포함하는 이유: "떴는데 아무 반응 없음"도 신호다
+     * (수락도 거절도 아닌 무시는 조건이 애매하게 넓다는 뜻일 수 있다).
+     */
+    @Query(
+        "SELECT * FROM proposal_event WHERE kind IN " +
+            "('accepted','not_now','dismissed','auto_applied','auto_failed','surfaced') " +
+            "ORDER BY ts ASC"
+    )
+    suspend fun allDecisionEvents(): List<ProposalEventRow>
+
+    /** 루틴 허브의 "몇 번 실행됐나". 원탭 실행(accepted)과 자동 실행을 합친다. */
+    @Query(
+        "SELECT proposalSignature AS signature, COUNT(*) AS cnt, MAX(ts) AS lastTs " +
+            "FROM proposal_event WHERE kind IN ('accepted','auto_applied') " +
+            "GROUP BY proposalSignature"
+    )
+    suspend fun runStats(): List<RunStat>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(row: KvRow)
 
     @Query("SELECT v FROM kv WHERE k = :k")
     suspend fun get(k: String): String?
 }
+
+/** [UsageDao.runStats] 의 행. Room 이 컬럼 별칭으로 채운다. */
+data class RunStat(val signature: String, val cnt: Int, val lastTs: Long)

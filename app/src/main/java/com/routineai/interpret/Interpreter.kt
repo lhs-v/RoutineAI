@@ -49,7 +49,7 @@ class Interpreter(private val ctx: Context) {
      * "`references/metrics.md` 를 따라" 라고 해도 어디부터가 그 파일인지 알 수 없다.
      * 마커의 경로 표기는 SKILL.md 본문의 참조 표기와 정확히 같게 맞춘다.
      */
-    private fun skillPrompt(): String = SKILL_FILES.joinToString("\n\n") { path ->
+    private fun skillPrompt(files: List<String> = SKILL_FILES): String = files.joinToString("\n\n") { path ->
         val body = runCatching {
             ctx.assets.open("$SKILL_ROOT/$path").bufferedReader().use { it.readText() }
         }.getOrDefault("")
@@ -79,7 +79,22 @@ class Interpreter(private val ctx: Context) {
      *
      * @param reportJson [com.routineai.analysis.Report] 를 직렬화한 문자열
      */
-    fun propose(reportJson: String, cfg: AzureConfig): Result<String> {
+    fun propose(reportJson: String, cfg: AzureConfig): Result<String> =
+        requestJson(cfg, skillPrompt(), userPrompt(reportJson))
+
+    /**
+     * 심층 분석(P3)용 — 별도 지침서 하나로 결정 이력을 보내 조건 정제를 받는다.
+     * 1차 분석과 시스템 프롬프트를 섞지 않는다: 두 작업은 입력도 출력 스키마도
+     * 다르고, 섞으면 서로의 규칙이 오염된다.
+     */
+    fun refine(userPromptText: String, cfg: AzureConfig): Result<String> =
+        requestJson(cfg, skillPrompt(DEEP_FILES), userPromptText)
+
+    /**
+     * 전송 + "JSON 만 내놓게 만들기". 첫 응답이 JSON 으로 파싱되지 않으면
+     * 한 번만 교정 요청을 붙여 재시도한다.
+     */
+    private fun requestJson(cfg: AzureConfig, system: String, user: String): Result<String> {
         val missing = cfg.missing
         if (missing.isNotEmpty()) {
             return Result.failure(
@@ -87,14 +102,12 @@ class Interpreter(private val ctx: Context) {
             )
         }
 
-        val system = skillPrompt()
-
         return runCatching {
-            var text = call(cfg, system, userPrompt(reportJson))
+            var text = call(cfg, system, user)
             if (extractJson(text) == null) {
                 text = call(
                     cfg, system,
-                    userPrompt(reportJson) +
+                    user +
                         "\n\n주의: 직전 응답이 JSON 파싱에 실패했습니다. " +
                         "설명 없이, 코드펜스 없이, 순수 JSON 객체 하나만 출력하세요."
                 )
@@ -287,6 +300,9 @@ class Interpreter(private val ctx: Context) {
             "references/cross-analysis.md",
             "references/worked-example.md",
         )
+
+        /** 심층 분석은 지침서 하나로 충분하다 — 입력이 리포트가 아니라 결정 이력이다. */
+        private val DEEP_FILES = listOf("deep-analysis.md")
     }
 }
 
