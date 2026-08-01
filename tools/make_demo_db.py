@@ -215,6 +215,94 @@ def backfill_bt(adb_path):
         print("BT 이력 없음")
 
 
+def synth_bt():
+    """
+    사용자가 밝힌 습관("유튜브 뮤직 전엔 보통 이어폰을 연결, 유튜브는 종종")을
+    데모 BT 데이터로 합성한다. --synth-bt 로만 실행된다.
+
+    시각을 지어내지 않는다 — 데모 DB 에 실제로 있는 두 앱의 실행 시각에 앵커해
+    그 직전(8~90초)에 연결을 심는다. 연결 상태를 시뮬레이션해서, 이미 연결 중이면
+    connect 를 다시 만들지 않는다(실제 리시버가 보게 될 모습과 같게).
+    합성 행은 majorClass=-1 로 표시한다 — 실측과 항상 구분되고, 재실행 시
+    이 표시로 지우고 다시 만들므로 멱등이다. 실측 BT가 있는 날(당일 덤프)은
+    건드리지 않는다.
+    """
+    import random
+    rng = random.Random(42)
+    MUSIC = "com.google.android.apps.youtube.music"
+    TUBE = "com.google.android.youtube"
+    NAME = "Galaxy Buds3 Pro"
+    BOUT_GAP = 45 * 60 * 1000
+
+    con = sqlite3.connect(ASSET)
+    real_days = {kst(ts).date() for (ts,) in
+                 con.execute("SELECT ts FROM bt_event WHERE majorClass != -1")}
+    # 연쇄는 "연결 뒤 처음 연 앱"과 짝지어지므로, 연결과 앵커 앱 사이에
+    # 다른 앱 실행이 끼면 안 된다. 낄 자리 검사는 Chains 와 같은 필터를 써야
+    # 한다 — 런처·시스템·키보드를 포함하면 "홈 → 뮤직" 흐름의 앵커가
+    # 전부 "직전에 실행 있음"으로 퇴짜맞는다.
+    all_ts = [ts for ts, pkg in con.execute(
+        "SELECT ts, pkg FROM usage_event WHERE type=1 ORDER BY ts")
+        if pkg not in ("com.sec.android.app.launcher", "android",
+                       "com.android.systemui", "com.android.intentresolver",
+                       "com.android.permissioncontroller",
+                       "com.google.android.permissioncontroller")
+        and "inputmethod" not in pkg and "honeyboard" not in pkg]
+    import bisect
+
+    def bouts_of(pkg):
+        out = []
+        for (ts,) in con.execute(
+            "SELECT ts FROM usage_event WHERE type=1 AND pkg=? ORDER BY ts", (pkg,)):
+            if out and ts - out[-1][1] <= BOUT_GAP:
+                out[-1][1] = ts
+            else:
+                out.append([ts, ts])
+        return out
+
+    # 앱별로 구간을 따로 잡는다 — 합치면 뮤직 실행이 유튜브 사용 중에 섞여
+    # "뮤직이 첫 앱인 구간"이 드물어지고, 사용자가 말한 습관과 반대로 나온다.
+    anchors = sorted(
+        [(s, e, MUSIC, 0.85) for s, e in bouts_of(MUSIC)] +
+        [(s, e, TUBE, 0.40) for s, e in bouts_of(TUBE)]
+    )
+
+    rows = []
+    open_until = None
+    for start, end, pkg, p in anchors:
+        if kst(start).date() in real_days:
+            continue
+        if open_until is not None and start <= open_until:
+            # 이미 연결 중 — connect 없이 연결만 연장 (실제 리시버와 같은 모습)
+            open_until = max(open_until, end + rng.randint(5, 25) * 60_000)
+            continue
+        if rng.random() >= p:
+            continue
+        # 직전의 다른 앱 실행보다 뒤에 connect 를 둬야 이 앱과 짝지어진다.
+        i = bisect.bisect_left(all_ts, start)
+        prev_ts = all_ts[i - 1] if i > 0 else 0
+        max_gap = min(90_000, start - prev_ts - 2_000)
+        if max_gap < 3_000:
+            continue    # 직전까지 폰을 쓰고 있던 구간 — 앵커 불가, 건너뜀
+        connect = start - rng.randint(3_000, int(max_gap))
+        if open_until is not None:
+            rows.append((min(open_until, connect - rng.randint(60, 300) * 1000),
+                         "disconnect", NAME, -1))
+        rows.append((connect, "connect", NAME, -1))
+        open_until = end + rng.randint(5, 25) * 60_000
+    if open_until is not None:
+        rows.append((open_until, "disconnect", NAME, -1))
+
+    deleted = con.execute("DELETE FROM bt_event WHERE majorClass = -1").rowcount
+    con.executemany(
+        "INSERT INTO bt_event (ts, action, name, majorClass) VALUES (?,?,?,?)",
+        sorted(rows))
+    con.commit(); con.close()
+    n_con = sum(1 for r in rows if r[1] == "connect")
+    print(f"BT 합성(--synth-bt): 연결 {n_con}건 포함 {len(rows)}행 "
+          f"(이전 합성 {deleted}행 교체) — 실제 실행 시각 앵커, majorClass=-1 표시")
+
+
 def trim_to_events(con):
     """모든 축의 시작점을 사용 이벤트의 시작점으로 통일한다.
 
@@ -271,6 +359,8 @@ if __name__ == "__main__":
     ap.add_argument("--dump", help="이미 받아둔 dumpsys netstats 파일 사용")
     ap.add_argument("--keep-history", action="store_true",
                     help="시작점 통일(사용 이벤트 이전 구간 제거)을 건너뛴다")
+    ap.add_argument("--synth-bt", action="store_true",
+                    help="사용자가 밝힌 이어폰 습관을 실행 시각에 앵커해 합성 (majorClass=-1 표시)")
     args = ap.parse_args()
 
     a = None if (args.no_pull and args.dump) else adb()
@@ -290,3 +380,5 @@ if __name__ == "__main__":
         trim_to_events(con)
     verify(con)
     backfill_bt(a or adb())
+    if args.synth_bt:
+        synth_bt()
