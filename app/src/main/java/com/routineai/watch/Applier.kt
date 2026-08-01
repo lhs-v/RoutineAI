@@ -32,6 +32,9 @@ object Applier {
     private const val TAG = "Applier"
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** 분할 토글과 인접 실행 사이에 시스템이 창을 정리할 틈 */
+    private const val SPLIT_STEP_MS = 450L
+
     /** 적용 결과. [real] 이 false 면 사용자가 마무리해야 한다는 뜻이다. */
     data class Result(val ok: Boolean, val message: String, val real: Boolean)
 
@@ -39,8 +42,12 @@ object Applier {
         runCatching { json.decodeFromString<List<String>>(p.actionParams) }
             .getOrDefault(emptyList())
 
-    fun apply(ctx: Context, p: ProposalRow): Result = when (p.actionType) {
-        "app_pair" -> appPair(ctx, params(p))
+    /**
+     * @param anchor 지금 화면에 떠 있는 앱. 앱페어에서 "이미 열린 쪽은 다시
+     *   띄우지 않기" 위해 쓴다.
+     */
+    fun apply(ctx: Context, p: ProposalRow, anchor: String? = null): Result = when (p.actionType) {
+        "app_pair" -> appPair(ctx, params(p), anchor)
         "launch_app" -> launch(ctx, params(p).firstOrNull())
         "mode_rotation" -> rotation(ctx, on = true)
         "mode_dnd" -> dnd(ctx, on = true)
@@ -57,27 +64,47 @@ object Applier {
     // ------------------------------------------------------------------
 
     /**
-     * 분할화면. 첫 앱을 새 태스크로 띄우고 두 번째를 인접 배치로 붙인다.
-     * 폴더블/태블릿에서는 대개 그대로 두 화면이 되고, 안 되면 순차 실행으로 보인다.
+     * 분할화면.
+     *
+     * FLAG_ACTIVITY_LAUNCH_ADJACENT 만으로는 안 된다 — 그 플래그는 **이미
+     * 멀티윈도우일 때만** 인접 배치가 되고, 단일 화면에서는 그냥 순차 실행이라
+     * 두 번째 앱이 첫 앱을 덮어버린다(실측으로 확인).
+     *
+     * 단일 화면에서 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
+     * 순서: (앵커 앱을 앞으로) → 분할 토글 → 나머지 앱을 인접으로 실행.
+     *
+     * @param anchor 이미 화면에 떠 있는 쪽. 있으면 다시 띄우지 않는다.
      */
-    private fun appPair(ctx: Context, pkgs: List<String>): Result {
+    private fun appPair(ctx: Context, pkgs: List<String>, anchor: String?): Result {
         if (pkgs.size < 2) return Result(false, "앱 두 개가 필요합니다", real = false)
-        val first = intentFor(ctx, pkgs[0]) ?: return Result(false, "${pkgs[0]} 를 찾을 수 없습니다", false)
-        val second = intentFor(ctx, pkgs[1]) ?: return Result(false, "${pkgs[1]} 를 찾을 수 없습니다", false)
+        val other = pkgs.firstOrNull { it != anchor } ?: pkgs[1]
+        val base = anchor ?: pkgs[0]
+        if (intentFor(ctx, other) == null) return Result(false, "$other 를 찾을 수 없습니다", false)
+
+        if (!PatternAccessibilityService.isConnected()) {
+            return Result(false, "분할화면에는 접근성 권한이 필요합니다", real = false)
+        }
+
         return runCatching {
-            first.addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+            // 앵커가 없으면(제안 탭에서 누른 경우) 기준 앱부터 띄운다.
+            if (anchor == null) {
+                intentFor(ctx, base)?.let {
+                    ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+                Thread.sleep(SPLIT_STEP_MS)
+            }
+            if (!PatternAccessibilityService.toggleSplitScreen()) {
+                return@runCatching Result(false, "분할화면 전환에 실패했습니다", real = false)
+            }
+            Thread.sleep(SPLIT_STEP_MS)
+            ctx.startActivity(
+                intentFor(ctx, other)!!.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+                )
             )
-            ctx.startActivity(first)
-            second.addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
-            )
-            ctx.startActivity(second)
-            Result(true, "두 앱을 함께 열었습니다", real = true)
+            Result(true, "두 앱을 분할화면으로 열었습니다", real = true)
         }.getOrElse { Result(false, "분할화면 실행 실패: ${it.message}", real = false) }
     }
 

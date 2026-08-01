@@ -68,6 +68,7 @@ import com.routineai.collect.HealthCollector
 import com.routineai.data.ProposalRow
 import com.routineai.interpret.ProposalEngine
 import com.routineai.watch.Applier
+import com.routineai.watch.SuggestionOverlay
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
 import com.routineai.collect.UsageCollector
@@ -621,8 +622,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (accepted.isNotEmpty()) {
-                Section("수락됨 ${accepted.size}", "심층 분석과 고도화 제안의 대상이 됩니다.")
-                accepted.forEach { p -> ProposalCard(p) }
+                Section(
+                    "수락됨 ${accepted.size}",
+                    "패턴이 감지되면 원탭으로 제안합니다. 자동 실행으로 바꾸면 묻지 않고 실행합니다.",
+                )
+                accepted.forEach { p ->
+                    ProposalCard(p, autoRunToggle = { on ->
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            Db.get(ctx).dao().upsertProposal(p.copy(autoRun = on))
+                            withContext(Dispatchers.Main) { onChanged() }
+                        }
+                    })
+                }
             }
             if (dismissed.isNotEmpty()) {
                 Section("보지 않기로 함 ${dismissed.size}", "다시 제안되지 않습니다.")
@@ -660,7 +671,9 @@ class MainActivity : ComponentActivity() {
         primary: Pair<String, () -> Unit>? = null,
         secondary: Pair<String, () -> Unit>? = null,
         dimmed: Boolean = false,
+        autoRunToggle: ((Boolean) -> Unit)? = null,
     ) {
+        val ctx = LocalContext.current
         val evidence = remember(p.evidenceJson) {
             runCatching { Json.decodeFromString<List<String>>(p.evidenceJson) }
                 .getOrDefault(emptyList())
@@ -678,14 +691,62 @@ class MainActivity : ComponentActivity() {
                 }
                 Text(p.oneLine, fontWeight = FontWeight.SemiBold)
                 Text(p.narrative, style = MaterialTheme.typography.bodySmall)
-                if (evidence.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (evidence.isNotEmpty()) {
+                        Text(
+                            if (expanded) "근거 접기" else "근거 ${evidence.size}개 보기",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { expanded = !expanded },
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // 데모 리허설용. 실제 트리거를 기다리지 않고 팝업을 확인한다.
                     Text(
-                        if (expanded) evidence.joinToString("\n") { "· $it" }
-                        else "근거 ${evidence.size}개 보기",
+                        "팝업 미리보기",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { expanded = !expanded },
+                        modifier = Modifier.clickable {
+                            if (!Applier.hasOverlay(ctx)) {
+                                android.widget.Toast.makeText(
+                                    ctx, "다른 앱 위에 표시 권한이 필요합니다",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                moveTaskToBack(true)
+                                lifecycleScope.launch {
+                                    kotlinx.coroutines.delay(600)
+                                    SuggestionOverlay.show(
+                                        ctx, p,
+                                        shortcut = p.state == "accepted" && !p.autoRun,
+                                        anchorPkg = null,
+                                    )
+                                }
+                            }
+                        },
                     )
+                }
+                if (expanded && evidence.isNotEmpty()) {
+                    Text(
+                        evidence.joinToString("\n") { "· $it" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (autoRunToggle != null) {
+                    var auto by remember(p.signature) { mutableStateOf(p.autoRun) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("자동 실행", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                if (auto) "묻지 않고 바로 실행합니다"
+                                else "매번 원탭으로 여쭤봅니다",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = auto, onCheckedChange = { auto = it; autoRunToggle(it) })
+                    }
                 }
                 if (primary != null || secondary != null) {
                     Row {
@@ -868,6 +929,38 @@ class MainActivity : ComponentActivity() {
                 where = "설정 → 접근성 → 설치된 앱 → RoutineAI",
                 onClick = { Applier.accessibilitySettings(ctx) },
             )
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("제안 강조색", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "팝업 테두리 발광과 버튼에 쓰입니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    var accent by remember { mutableStateOf(prefs.accent) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Settings.ACCENTS.forEach { (key, argb) ->
+                            val selected = key == accent
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable { accent = key; prefs.accent = key },
+                            ) {
+                                Box(
+                                    Modifier.size(if (selected) 34.dp else 28.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(argb))
+                                )
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    Settings.ACCENT_LABELS[key] ?: key,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selected) Color(argb)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             PermCard(
                 title = "시스템 설정 변경",
                 required = false,

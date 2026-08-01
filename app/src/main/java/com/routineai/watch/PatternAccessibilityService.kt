@@ -41,10 +41,29 @@ class PatternAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         Applier.logDeviceState(applicationContext)
     }
 
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
     companion object {
+        /**
+         * 분할화면 토글에 필요하다. 인접 실행 플래그는 이미 멀티윈도우일 때만
+         * 동작하므로, 단일 화면에서 진짜로 화면을 가르는 공개 경로는
+         * 접근성의 전역 동작뿐이다.
+         */
+        @Volatile
+        private var instance: PatternAccessibilityService? = null
+
+        fun toggleSplitScreen(): Boolean =
+            instance?.performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) ?: false
+
+        fun isConnected(): Boolean = instance != null
+
         /** 사용자가 "앱을 열었다"고 느끼지 않는 표면들 */
         private val IGNORED = setOf(
             "com.android.systemui",

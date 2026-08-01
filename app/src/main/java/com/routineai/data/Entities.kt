@@ -1,5 +1,6 @@
 package com.routineai.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -133,6 +134,25 @@ data class ProposalRow(
     val updatedAt: Long,
     val surfacedCount: Int = 0,
     val lastSurfacedAt: Long? = null,
+
+    /**
+     * 수락 뒤에도 매번 물어볼지(false) 말없이 실행할지(true).
+     * 기본은 물어보기다 — 앱이 저절로 열리면 "왜 열렸지"를 겪게 되고
+     * 그게 신뢰를 깎는다. 승격은 사용자가 카드에서 직접 하거나,
+     * P3 심층 분석이 "12번 중 12번 누르셨다"는 근거로 제안한다.
+     */
+    // Kotlin 기본값은 SQL 기본값이 아니다. 자동 마이그레이션이 기존 행을 채우려면
+    // defaultValue 를 명시해야 한다.
+    @ColumnInfo(defaultValue = "0")
+    val autoRun: Boolean = false,
+
+    /**
+     * 조건 정제 결과. 1차 LLM 은 통계만 보고 조건을 만들고, 2차(P3)가
+     * 수락·거절 맥락을 읽어 좁힌다. 비어 있으면 아직 정제 전이다.
+     * 예: hours="8-16", weekdays="1-5"
+     */
+    val conditionHours: String? = null,
+    val conditionWeekdays: String? = null,
 )
 
 /**
@@ -148,6 +168,24 @@ data class ProposalEventRow(
     val ts: Long,
     val proposalSignature: String,
     val kind: String,
+
+    // ---- 결정 순간의 맥락 ----
+    //
+    // 해석하지 않고 원시 값 그대로 남긴다. "22시와 23시가 같은 의미인가",
+    // "장 마감이라 거절했나" 같은 판단은 앱이 하면 안 된다 — 경계를 어디에
+    // 긋든 자의적이고(실측: 장중 정의에 따라 45~70% 로 흔들림), '장 마감'
+    // 이라는 개념은 데이터 어디에도 없다. 그건 세계지식을 가진 LLM 의 몫이라
+    // 심층 분석(P3)이 이 기록을 읽고 조건을 좁힌다.
+    @ColumnInfo(defaultValue = "-1")
+    val hour: Int = -1,
+    /** 1=월 … 7=일 */
+    @ColumnInfo(defaultValue = "-1")
+    val weekday: Int = -1,
+    /** 결정 당시 화면에 있던 앱 */
+    val foregroundPkg: String? = null,
+    /** "wifi:Wi-Fi A" | "cellular" | null */
+    val network: String? = null,
+    val btDevice: String? = null,
 )
 
 /** 마지막 수집 시각 등 내부 상태 */

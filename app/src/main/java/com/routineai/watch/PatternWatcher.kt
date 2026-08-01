@@ -22,12 +22,21 @@ import com.routineai.data.ProposalRow
 object PatternWatcher {
 
     private const val TAG = "PatternWatcher"
-    private const val SNOOZE_MS = 6L * 60 * 60 * 1000
-    /** 같은 제안을 이 간격 안에 다시 띄우지 않는다 */
-    private const val RESURFACE_MS = 30L * 60 * 1000
+
+    /** 같은 제안을 이 간격 안에 다시 띄우지 않는다 (연타 방지용 최소 간격) */
+    private const val RESURFACE_MS = 20L * 60 * 1000
+
+    /** 하루 방해 예산. 좋은 제안이라도 이만큼 넘으면 제안 탭에 조용히 쌓인다. */
+    private const val DAILY_BUDGET = 3
+    private const val PER_CATEGORY_BUDGET = 1
+
+    /** 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
+    private const val BUCKET_REJECT_LIMIT = 2
 
     /** app_mode 로 바꿔둔 설정. 이탈 시 되돌리기 위해 기억한다. */
     private val activeModes = HashMap<String, ProposalRow>()
+
+    private var lastForegroundPkg: String? = null
 
     suspend fun onAppForeground(ctx: Context, pkg: String) {
         // 1) 떠난 앱의 모드 복구가 먼저다.
@@ -35,10 +44,17 @@ object PatternWatcher {
         for (key in leaving) {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
         }
-        dispatch(ctx, "app_launch", pkg) { it.triggerParam == pkg }
+        lastForegroundPkg = pkg
+        // 앱페어는 둘 중 아무 쪽을 열어도 성립한다. triggerParam 하나로만
+        // 매칭하면 한쪽에서만 뜨는데, 실제로 그래서 토스에서는 안 떴다.
+        dispatch(ctx, "app_launch", pkg) {
+            it.triggerParam == pkg ||
+                (it.actionType == "app_pair" && pkg in Applier.params(it))
+        }
     }
 
     suspend fun onBluetooth(ctx: Context, connected: Boolean, name: String) {
+        BtState.update(name, connected)
         val type = if (connected) "bt_connect" else "bt_disconnect"
         dispatch(ctx, type, name) { it.triggerParam.isNullOrBlank() || it.triggerParam == name }
     }
@@ -58,44 +74,102 @@ object PatternWatcher {
     ) {
         val dao = Db.get(ctx).dao()
         val now = System.currentTimeMillis()
-        val hits = dao.proposals().filter {
-            it.triggerType == triggerType && paramMatches(it) && isLive(it, now)
-        }
-        if (hits.isEmpty()) return
-        Log.i(TAG, "트리거 $triggerType($param) → 제안 ${hits.size}건")
+        val here = DecisionContext.capture(ctx, "", "probe", lastForegroundPkg, now)
+        val hereBucket = DecisionContext.bucket(here)
 
-        for (p in hits) {
-            if (p.state == "accepted") {
-                // 의도가 확인된 루틴 — 묻지 않고 실행한다.
-                val r = Applier.apply(ctx, p)
+        val matched = dao.proposals().filter { it.triggerType == triggerType && paramMatches(it) }
+        if (matched.isEmpty()) return
+
+        // 1) 이미 수락된 루틴 — 사용자가 자동 실행으로 승격한 것만 말없이 실행한다.
+        for (p in matched.filter { it.state == "accepted" }) {
+            if (!inCondition(p, here)) continue
+            if (p.autoRun) {
+                val r = Applier.apply(ctx, p, anchor = lastForegroundPkg)
                 if (p.category == "app_mode" && r.ok) rememberMode(p)
                 dao.logProposalEvent(
-                    ProposalEventRow(
-                        ts = now, proposalSignature = p.signature,
-                        kind = if (r.ok) "auto_applied" else "auto_failed"
+                    DecisionContext.capture(
+                        ctx, p.signature,
+                        if (r.ok) "auto_applied" else "auto_failed", lastForegroundPkg, now
                     )
                 )
                 Log.i(TAG, "자동 실행: ${p.oneLine} → ${r.message}")
-            } else {
-                // 아직 후보 — 팝업으로 물어본다.
-                dao.upsertProposal(
-                    p.copy(surfacedCount = p.surfacedCount + 1, lastSurfacedAt = now)
-                )
-                dao.logProposalEvent(
-                    ProposalEventRow(ts = now, proposalSignature = p.signature, kind = "surfaced")
-                )
-                SuggestionOverlay.show(ctx, p)
-                return   // 한 번에 하나만 띄운다
+            } else if (canSurface(ctx, p, now)) {
+                surface(ctx, p, now, shortcut = true)
+                return
             }
+        }
+
+        // 2) 후보 — 본 적 없는 맥락에서만 물어본다.
+        for (p in matched.filter { it.state !in setOf("accepted", "dismissed") }) {
+            if (!canSurface(ctx, p, now)) continue
+            if (rejectedHereBefore(dao, p, hereBucket)) continue
+            surface(ctx, p, now, shortcut = false)
+            return   // 한 번에 하나만 띄운다
         }
     }
 
-    /** 지금 이 제안을 살펴볼 상태인가 */
-    private fun isLive(p: ProposalRow, now: Long): Boolean = when (p.state) {
-        "accepted" -> true
-        "dismissed" -> false
-        "snoozed" -> now - p.updatedAt > SNOOZE_MS
-        else -> (p.lastSurfacedAt ?: 0L).let { now - it > RESURFACE_MS }
+    private suspend fun surface(ctx: Context, p: ProposalRow, now: Long, shortcut: Boolean) {
+        Db.get(ctx).dao().let { dao ->
+            dao.upsertProposal(p.copy(surfacedCount = p.surfacedCount + 1, lastSurfacedAt = now))
+            dao.logProposalEvent(
+                DecisionContext.capture(ctx, p.signature, "surfaced", lastForegroundPkg, now)
+            )
+        }
+        SuggestionOverlay.show(ctx, p, shortcut, lastForegroundPkg)
+    }
+
+    /**
+     * 이 맥락 버킷에서 이미 거절한 적이 있는가.
+     *
+     * 시간으로 덮지 않는 이유: 22시에 거절했다고 09시에도 안 띄우면, 정작
+     * 사용자가 원했을 상황을 영영 만나지 못한다. 거절은 "이 제안이 싫다"가
+     * 아니라 "이 조건이 너무 넓다"는 신호일 수 있고, 그 구분은 다른 맥락에서
+     * 한 번 더 물어봐야 얻어진다.
+     */
+    private suspend fun rejectedHereBefore(
+        dao: com.routineai.data.UsageDao,
+        p: ProposalRow,
+        hereBucket: String,
+    ): Boolean {
+        val rejects = dao.decisions(p.signature)
+            .filter { it.kind == "not_now" || it.kind == "dismissed" }
+        if (rejects.any { it.kind == "dismissed" }) return true
+        return rejects.count { DecisionContext.bucket(it) == hereBucket } >= BUCKET_REJECT_LIMIT
+    }
+
+    /** 방해 예산 + 연타 방지 */
+    private suspend fun canSurface(ctx: Context, p: ProposalRow, now: Long): Boolean {
+        if (now - (p.lastSurfacedAt ?: 0L) < RESURFACE_MS) return false
+        val dao = Db.get(ctx).dao()
+        val since = now - 24L * 60 * 60 * 1000
+        val today = dao.proposals().filter { (it.lastSurfacedAt ?: 0L) > since }
+        if (today.size >= DAILY_BUDGET) {
+            Log.i(TAG, "방해 예산 소진 — ${p.oneLine} 은 제안 탭에만 쌓는다")
+            return false
+        }
+        if (today.count { it.category == p.category } >= PER_CATEGORY_BUDGET) return false
+        return true
+    }
+
+    /** P3 가 조건을 좁혀두었으면 그 조건 밖에서는 뜨지 않는다 */
+    private fun inCondition(p: ProposalRow, here: ProposalEventRow): Boolean {
+        p.conditionHours?.let { spec ->
+            val ok = spec.split(',').any { part ->
+                val r = part.trim().split('-')
+                if (r.size == 2) here.hour >= r[0].toInt() && here.hour < r[1].toInt()
+                else here.hour == part.trim().toIntOrNull()
+            }
+            if (!ok) return false
+        }
+        p.conditionWeekdays?.let { spec ->
+            val ok = spec.split(',').any { part ->
+                val r = part.trim().split('-')
+                if (r.size == 2) here.weekday >= r[0].toInt() && here.weekday <= r[1].toInt()
+                else here.weekday == part.trim().toIntOrNull()
+            }
+            if (!ok) return false
+        }
+        return true
     }
 
     private fun rememberMode(p: ProposalRow) {

@@ -77,12 +77,37 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("demo_mode", false)
         set(v) = sp.edit().putBoolean("demo_mode", v).apply()
 
+    /** 제안 팝업의 강조색 키. [ACCENTS] 의 항목 중 하나. */
+    var accent: String
+        get() = sp.getString("accent", DEFAULT_ACCENT).orEmpty().ifBlank { DEFAULT_ACCENT }
+        set(v) = sp.edit().putString("accent", v).apply()
+
+    fun accentColor(): Int = ACCENTS[accent] ?: ACCENTS.getValue(DEFAULT_ACCENT)
+
     fun azureConfig(): AzureConfig =
         AzureConfig(azureEndpoint, azureApiKey, azureApiVersion, azureDeployment)
 
     companion object {
         /** 채팅 완성이 GA 인 버전. 배포가 더 새 버전을 요구하면 화면에서 바꾼다. */
         const val DEFAULT_API_VERSION = "2024-10-21"
+
+        /**
+         * 제안 팝업 강조색 후보.
+         * 기본이 틸인 이유: 시스템 UI 느낌이면서 경고(빨강)·성공(초록)과
+         * 겹치지 않아 "이건 알림이 아니라 제안"으로 읽힌다.
+         */
+        const val DEFAULT_ACCENT = "teal"
+        val ACCENTS: Map<String, Int> = linkedMapOf(
+            "teal" to 0xFF1D9E75.toInt(),
+            "blue" to 0xFF378ADD.toInt(),
+            "coral" to 0xFFD85A30.toInt(),
+            "lime" to 0xFF639922.toInt(),
+            "mono" to 0xFF8A8A93.toInt(),
+        )
+        val ACCENT_LABELS: Map<String, String> = mapOf(
+            "teal" to "틸", "blue" to "블루", "coral" to "코랄",
+            "lime" to "라임", "mono" to "무채",
+        )
 
         private const val K_ENDPOINT = "azure_endpoint"
         private const val K_API_KEY = "azure_api_key"

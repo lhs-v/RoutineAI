@@ -89,6 +89,13 @@ interface UsageDao {
     @Query("SELECT * FROM proposal_event WHERE proposalSignature = :sig ORDER BY ts ASC")
     suspend fun proposalEvents(sig: String): List<ProposalEventRow>
 
+    /** 사용자가 실제로 결정한 이력만. 노출·생성 로그는 뺀다. */
+    @Query(
+        "SELECT * FROM proposal_event WHERE proposalSignature = :sig " +
+            "AND kind IN ('accepted','not_now','dismissed') ORDER BY ts ASC"
+    )
+    suspend fun decisions(sig: String): List<ProposalEventRow>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(row: KvRow)
 
