@@ -60,10 +60,9 @@ object WatchStatus {
             val why = when {
                 p.state == "accepted" -> "수락됨 · 팝업 제안"
                 cool != null -> "대기 중 · $cool"
-                budgetLeft == 0 -> "예산 소진"
                 else -> "감시 중"
             }
-            lines += Line(shorten(p), why, warn = why == "예산 소진")
+            lines += Line(shorten(p), why)
         }
         return Snapshot(lines, bucket)
     }
