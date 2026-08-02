@@ -138,6 +138,12 @@ data class HourStat(val hour: Int, val screenMinutes: Double, val notifs: Double
 data class AppStat(
     val pkg: String,
     val label: String,
+    /**
+     * 개발자가 매니페스트에 선언한 앱 분류("게임"·"오디오·음악"·"영상" 등).
+     * 선언 안 한 앱이 많아 null 이 흔하다 — 세계지식이 안 닿는 앱의 목적을
+     * 추론할 때의 보조 단서이지, 지어내라는 뜻이 아니다.
+     */
+    val category: String? = null,
     val meanMinutes: Double,
     val medianMinutes: Double,
     val sdMinutes: Double,

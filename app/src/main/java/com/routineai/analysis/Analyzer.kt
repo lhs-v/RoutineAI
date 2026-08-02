@@ -170,6 +170,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             AppStat(
                 pkg = pkg,
                 label = label(pkg),
+                category = appCategory(pm, pkg),
                 meanMinutes = vals.average().r2(),
                 medianMinutes = vals.median().r2(),
                 sdMinutes = vals.sd().r2(),
@@ -775,6 +776,25 @@ private const val BUCKET_MS = 2L * 60 * 60 * 1000
 /** 같은 (앱, 채널) 알림이 이 간격 안에 다시 오면 재게시로 본다 */
 private const val NOTIF_REPOST_WINDOW_MS = 5_000L
 private val WEEKDAY_ORDER = listOf("월", "화", "수", "목", "금", "토", "일")
+
+/**
+ * 개발자가 매니페스트에 선언한 앱 분류. 없으면 null — 지어내지 않는다.
+ * 해석(1차·심층)이 앱의 목적을 정의할 때 세계지식의 보조 단서다.
+ */
+internal fun appCategory(pm: PackageManager, pkg: String): String? = runCatching {
+    when (pm.getApplicationInfo(pkg, 0).category) {
+        android.content.pm.ApplicationInfo.CATEGORY_GAME -> "게임"
+        android.content.pm.ApplicationInfo.CATEGORY_AUDIO -> "오디오·음악"
+        android.content.pm.ApplicationInfo.CATEGORY_VIDEO -> "영상"
+        android.content.pm.ApplicationInfo.CATEGORY_IMAGE -> "사진·이미지"
+        android.content.pm.ApplicationInfo.CATEGORY_SOCIAL -> "소셜·커뮤니케이션"
+        android.content.pm.ApplicationInfo.CATEGORY_NEWS -> "뉴스"
+        android.content.pm.ApplicationInfo.CATEGORY_MAPS -> "지도·이동"
+        android.content.pm.ApplicationInfo.CATEGORY_PRODUCTIVITY -> "생산성"
+        android.content.pm.ApplicationInfo.CATEGORY_ACCESSIBILITY -> "접근성"
+        else -> null
+    }
+}.getOrNull()
 
 // ---- 작은 통계 헬퍼 ----
 

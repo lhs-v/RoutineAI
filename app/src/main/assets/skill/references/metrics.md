@@ -56,6 +56,8 @@ app_mode 의 주 근거: "잠들기 전 마지막 화면의 주인"이 누구인
 **apps** — 앱별 사용시간의 평균·중앙값·편차·범위·사용일수·dailyMinutes(원본
 궤적). 평균과 중앙값이 크게 다르면 습관이 아니라 사건이다 — dailyMinutes 로
 직접 확인. **secondsPerLaunch** 가 짧고 실행이 잦으면 확인 습관형 앱.
+**category** 는 개발자가 선언한 분류(게임·오디오·영상 등, null 흔함) —
+세계지식이 안 닿는 앱의 목적을 정의할 때의 보조 단서다.
 **firstApps / lastApps / morningFirstApps** — 세션의 진입·이탈 앱, 아침 진입점.
 **netApps** — 앱별 통신량·모바일 비율. 통신이지 사용이 아니다(artifacts S1).
 **transitions / coUse** — 방향별 전환과 분할화면 원본. appPairs 의 재료이며
