@@ -10,12 +10,18 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * 트리거 매칭의 두뇌.
+ * 트리거 매칭의 두뇌 — 모든 감지 경로의 **단일 입구**.
+ *
+ * 감지 경로는 여럿이다(폴링·브로드캐스트·접근성). 빠른 경로는 즉시 보고하고
+ * 끊기지 않는 경로는 늦게 한 번 더 보고하므로, 같은 사건이 두 번 들어올 수
+ * 있다. 경로끼리 서로를 알게 하는 대신 여기 입구의 관문([signal])에서 접는다 —
+ * 새 감지 경로를 붙일 때 중복 걱정 없이 on* 메서드만 부르면 되는 이유다.
  *
  * 제안의 수명주기가 여기서 갈린다:
  *  - candidate  → 패턴이 감지되면 **팝업으로 제안**한다 (사용자 결정 대기)
- *  - accepted   → 이미 의도가 확인됐으므로 **말없이 실행**한다
- *  - snoozed    → 쿨다운(6시간) 동안 조용, 지나면 다시 감시
+ *  - accepted   → 원탭 제안, 자동 실행으로 승격했으면 **말없이 실행**
+ *  - snoozed    → '이번엔 아님'. 별도 타이머는 없다 — 실제 억제는 맥락 버킷
+ *                 거절([BUCKET_REJECT_LIMIT])과 재노출 간격([RESURFACE_MS])이 한다
  *  - dismissed  → 영원히 무시
  *
  * 앱 맥락 모드(app_mode)는 진입/이탈이 쌍이라 따로 다룬다 — 들어갈 때 설정을
@@ -30,8 +36,9 @@ object PatternWatcher {
     const val RESURFACE_MS = 20L * 60 * 1000
 
     /**
-     * 수락된 루틴의 연타 방지 간격. 짧게 두는 이유는 이게 방해가 아니라
-     * 요청 이행이기 때문이다 — 앱을 나갔다 다시 들어오면 또 필요하다.
+     * 수락된 루틴의 연타 방지 간격 — 원탭 팝업과 자동 실행에 같이 쓴다.
+     * 짧게 두는 이유는 이게 방해가 아니라 요청 이행이기 때문이다 —
+     * 앱을 나갔다 다시 들어오면 또 필요하다.
      */
     const val ACCEPTED_MIN_GAP_MS = 60L * 1000
 
@@ -42,13 +49,29 @@ object PatternWatcher {
     /** 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
     const val BUCKET_REJECT_LIMIT = 2
 
+    /**
+     * 같은 (신호, 파라미터)가 이 안에 다시 오면 같은 사건의 중복 보고로 본다.
+     * 가장 느린 경로(1.5초 폴링)의 지연을 넉넉히 덮되, "나갔다 바로 다시
+     * 들어옴" 같은 진짜 재발생은 삼키지 않을 만큼만 짧게.
+     */
+    private const val SIGNAL_DEDUP_MS = 5_000L
+    private val recentSignals = HashMap<String, Long>()
+
+    /**
+     * 자동 실행의 시그니처별 마지막 실행 시각. 입구 관문은 "같은 사건의 중복
+     * 보고"만 거르고, 이건 "다른 사건이지만 너무 잦음"을 거른다 — Wi-Fi 가
+     * 공유기 밴드를 오가며 15초마다 다른 별칭으로 연결되는 것을 실측했다.
+     */
+    private val lastAutoRun = HashMap<String, Long>()
+
     /** app_mode 로 바꿔둔 설정. 이탈 시 되돌리기 위해 기억한다. */
     private val activeModes = HashMap<String, ProposalRow>()
 
     private var lastForegroundPkg: String? = null
 
     suspend fun onAppForeground(ctx: Context, pkg: String) {
-        // 1) 떠난 앱의 모드 복구가 먼저다.
+        // 모드 복구와 앵커 갱신은 멱등이라 관문 앞에서 한다 — 중복 보고가
+        // 와도 같은 앱이면 되돌릴 것도, 바뀔 것도 없다.
         val leaving = activeModes.keys.filter { it != pkg }
         for (key in leaving) {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
@@ -57,7 +80,7 @@ object PatternWatcher {
         lastForegroundPkg = pkg
         // 앱페어는 둘 중 아무 쪽을 열어도 성립한다. triggerParam 하나로만
         // 매칭하면 한쪽에서만 뜨는데, 실제로 그래서 토스에서는 안 떴다.
-        dispatch(ctx, "app_launch", pkg) {
+        signal(ctx, "app_launch", pkg) {
             it.triggerParam == pkg ||
                 (it.actionType == "app_pair" && pkg in Applier.params(it))
         }
@@ -66,26 +89,53 @@ object PatternWatcher {
     suspend fun onBluetooth(ctx: Context, connected: Boolean, name: String) {
         BtState.update(name, connected)
         val type = if (connected) "bt_connect" else "bt_disconnect"
-        dispatch(ctx, type, name) { it.triggerParam.isNullOrBlank() || it.triggerParam == name }
+        signal(ctx, type, name) { it.triggerParam.isNullOrBlank() || it.triggerParam == name }
     }
 
     suspend fun onNetwork(ctx: Context, wifi: Boolean, alias: String?) {
         val type = if (wifi) "wifi_connect" else "wifi_disconnect"
-        dispatch(ctx, type, alias) { it.triggerParam.isNullOrBlank() || it.triggerParam == alias }
+        signal(ctx, type, alias) { it.triggerParam.isNullOrBlank() || it.triggerParam == alias }
     }
 
     /** @param hhmm "HH:mm" — proposal-rules.md 의 time 트리거 형식과 같다 */
     suspend fun onTime(ctx: Context, hhmm: String) {
-        dispatch(ctx, "time", hhmm) { it.triggerParam == hhmm }
+        signal(ctx, "time", hhmm) { it.triggerParam == hhmm }
     }
 
     suspend fun onExercise(ctx: Context, name: String) {
-        dispatch(ctx, "exercise_start", name) {
+        signal(ctx, "exercise_start", name) {
             it.triggerParam.isNullOrBlank() || it.triggerParam == name
         }
     }
 
     // ------------------------------------------------------------------
+
+    /**
+     * 단일 관문. 모든 on* 이 여기를 지나며, 같은 사건의 중복 보고는
+     * 여기서 죽는다. 관문을 통과한 신호만 [dispatch] 로 간다.
+     */
+    private suspend fun signal(
+        ctx: Context,
+        triggerType: String,
+        param: String?,
+        paramMatches: (ProposalRow) -> Boolean,
+    ) {
+        val now = System.currentTimeMillis()
+        val key = "$triggerType:${param.orEmpty()}"
+        synchronized(recentSignals) {
+            val last = recentSignals[key]
+            recentSignals[key] = now
+            // 오래된 키가 무한히 쌓이지 않게 이따금 청소한다.
+            if (recentSignals.size > 64) {
+                recentSignals.entries.removeAll { now - it.value > 60_000 }
+            }
+            if (last != null && now - last < SIGNAL_DEDUP_MS) {
+                Log.i(TAG, "중복 신호 접음: $key")
+                return
+            }
+        }
+        dispatch(ctx, triggerType, param, paramMatches)
+    }
 
     private suspend fun dispatch(
         ctx: Context,
@@ -105,6 +155,11 @@ object PatternWatcher {
         for (p in matched.filter { it.state == "accepted" }) {
             if (!inCondition(p, here)) continue
             if (p.autoRun) {
+                // 원탭 팝업의 연타 방지와 같은 간격을 자동 실행에도 건다.
+                // 이게 없으면 잦은 트리거가 실행 횟수를 부풀리고, 그 수치가
+                // 심층 분석의 승격 판단 근거까지 오염시킨다.
+                if (now - (lastAutoRun[p.signature] ?: 0L) < ACCEPTED_MIN_GAP_MS) continue
+                lastAutoRun[p.signature] = now
                 val r = Applier.apply(ctx, p, anchor = lastForegroundPkg)
                 if (p.category == "app_mode" && r.ok) rememberMode(ctx, p)
                 dao.logProposalEvent(

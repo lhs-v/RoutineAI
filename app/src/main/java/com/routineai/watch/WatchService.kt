@@ -74,6 +74,13 @@ class WatchService : Service() {
 
     private suspend fun poll() {
         if (!Permissions.hasUsageAccess(applicationContext)) return
+        // 접근성이 붙어 있으면 앱 전환은 그쪽이 즉시 보고한다. 같은 신호를
+        // 1.5초 늦게 또 만들 이유가 없으니 조회를 쉰다 — 단, 커서는
+        // 전진시켜서 접근성이 꺼지는 순간 밀린 옛 이벤트를 재생하지 않는다.
+        if (PatternAccessibilityService.isConnected()) {
+            cursor = System.currentTimeMillis()
+            return
+        }
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
         // 경계에서 이벤트를 흘리지 않도록 조금 겹쳐 읽는다.
