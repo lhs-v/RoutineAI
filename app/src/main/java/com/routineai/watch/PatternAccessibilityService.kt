@@ -71,16 +71,50 @@ class PatternAccessibilityService : AccessibilityService() {
 
         // 3) 앱 선택에서 상대 앱. 목록에 없으면 한 번 스크롤해 본다 —
         //    오래 안 쓴 앱은 첫 화면에 없다.
-        var target = await { root -> find(root) { it.text?.toString() == otherLabel } }
+        var target = await { root -> findVisible(root, otherLabel) }
         if (target == null) {
             scrollOnce()
-            target = await { root -> find(root) { it.text?.toString() == otherLabel } }
+            target = await { root -> findVisible(root, otherLabel) }
         }
         if (target == null) {
             Log.w(TAG, "앱 선택에서 $otherLabel 못 찾음")
             return false
         }
-        return click(target)
+
+        // 여기는 ACTION_CLICK 이 통하지 않는다 — 삼성 앱 선택 그리드는 true 를
+        // 돌려주고도 아무 일도 하지 않았다(실측: split=true 인데 선택 안 됨).
+        // 사람 손가락과 같은 진짜 터치를 보낸다.
+        if (!tapNode(target)) return false
+
+        // 클릭 결과를 검증한다. "눌렀다"가 아니라 "앱 선택 화면이 사라졌다"가
+        // 성공의 정의다 — 안 그러면 실패를 성공으로 보고하게 된다.
+        val gone = await(3_000L) { root ->
+            if (find(root) { it.text?.toString() == PICKER_TITLE } == null) true else null
+        } ?: false
+        if (!gone) Log.w(TAG, "탭했지만 앱 선택 화면이 그대로다")
+        return gone
+    }
+
+    /** 화면에 실제로 보이는 것 중에서 찾는다 — 접힌 목록의 노드를 눌러도 소용없다. */
+    private fun findVisible(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? =
+        find(root) { n ->
+            n.text?.toString() == label && n.isVisibleToUser &&
+                android.graphics.Rect().also { n.getBoundsInScreen(it) }.width() > 0
+        }
+
+    /** 노드 한가운데를 실제로 터치한다. */
+    private fun tapNode(node: AccessibilityNodeInfo): Boolean {
+        val r = android.graphics.Rect().also { node.getBoundsInScreen(it) }
+        if (r.width() <= 0 || r.height() <= 0) return false
+        val path = android.graphics.Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val gesture = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(
+                android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)
+            )
+            .build()
+        val ok = dispatchGesture(gesture, null, null)
+        Thread.sleep(500)
+        return ok
     }
 
     /** 조건이 만족될 때까지 짧게 다시 본다. 화면이 바뀌는 데 시간이 걸린다. */
@@ -189,6 +223,9 @@ class PatternAccessibilityService : AccessibilityService() {
         /** 최근앱 카드의 메뉴 버튼 — content-desc 가 "고급 옵션, <앱>, 버튼" */
         private const val ADV_OPTIONS = "고급 옵션"
         private const val SPLIT_MENU = "분할 화면으로 열기"
+
+        /** 두 번째 앱을 고르는 화면의 제목 — 사라졌으면 선택이 먹혔다는 뜻 */
+        private const val PICKER_TITLE = "앱 선택"
 
         /** 사용자가 "앱을 열었다"고 느끼지 않는 표면들 */
         private val IGNORED = setOf(
