@@ -15,6 +15,8 @@ data class Report(
     val hourly: List<HourStat>,
     val apps: List<AppStat>,
     val sleep: List<SleepStat>,
+    /** 수면 직전·심야의 앱 습관. app_mode 서사의 주 근거 */
+    val nightHabit: List<NightHabitStat> = emptyList(),
     /**
      * Health Connect 세션 요약(수면·운동). 세션이 연쇄 임계(횟수≥3)에 못
      * 미쳐도 여기엔 나온다 — "수집이 흐르고 있는가"가 보이지 않으면
@@ -150,6 +152,26 @@ data class AppStat(
      * 해석하는 쪽이 "매일 비슷했는가, 하루가 튀었는가"를 직접 확인할 수 있다.
      */
     val dailyMinutes: List<Double>,
+)
+
+/**
+ * 잠들기 전과 심야의 앱 습관 — app_mode 판단의 주 근거.
+ *
+ * "그 앱을 쓰는 동안 이 설정이 낫다"는 서사는 그 앱이 **언제** 쓰이는지를
+ * 알아야 써진다. apps 의 topHours 만으로는 수면 창과의 겹침을 수치로
+ * 주장할 수 없었다(실측: app_mode 가 후보에도 못 올랐다).
+ */
+@Serializable
+data class NightHabitStat(
+    val label: String,
+    /** 수면 시작 직전 60분에서 이 앱이 차지한 비율 0~100 */
+    val preSleepSharePct: Double,
+    /** 직전 60분에 등장한 밤 수 */
+    val preSleepNights: Int,
+    /** 22시~02시 밤당 평균 사용 분 */
+    val lateNightMinutesPerNight: Double,
+    /** 수면 추정이 있는 관측 밤 수 */
+    val nightsObserved: Int,
 )
 
 /** Health Connect 세션 종류별 요약. kind: "sleep" | "exercise:걷기" */

@@ -393,6 +393,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 device = android.os.Build.MODEL,
             ),
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
+            nightHabit = nightHabit(sessions, launcher, system),
             health = healthSessions.groupBy { it.kind }.map { (k, list) ->
                 HealthStat(
                     kind = k,
@@ -453,6 +454,71 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
     }
 
     // ------------------------------------------------------------------
+
+    /**
+     * 수면 직전 60분과 심야(22~02시)에 어떤 앱을 쓰는가.
+     *
+     * 수면 창 판정은 [estimateSleep] 과 같은 규칙(3시간 이상 공백, 밤 시작)을
+     * 쓴다 — 두 지표가 다른 밤을 세면 해석하는 쪽이 교차 검증을 할 수 없다.
+     */
+    private fun nightHabit(
+        sessions: List<Sessionizer.Session>,
+        launcher: String,
+        system: Set<String>,
+    ): List<NightHabitStat> {
+        data class Acc(var preMs: Long = 0, val preNights: MutableSet<Long> = HashSet(), var lateMs: Long = 0)
+        val acc = HashMap<String, Acc>()
+        var nights = 0
+        var preTotalMs = 0L
+
+        fun overlap(s: Long, e: Long, from: Long, to: Long) = maxOf(0L, minOf(e, to) - maxOf(s, from))
+
+        for (i in 0 until sessions.size - 1) {
+            val gapStart = sessions[i].end
+            val gapEnd = sessions[i + 1].start
+            if ((gapEnd - gapStart).toDouble() / 3_600_000 < 3.0) continue
+            val st = gapStart.toLocalDateTime()
+            if (st.hour < 20 && st.hour >= 5) continue
+            nights++
+
+            // 수면 직전 60분
+            val preFrom = gapStart - 60L * 60 * 1000
+            // 심야 창: 그 밤의 22:00 ~ 다음날 02:00
+            val nightDate = if (st.hour >= 20) st.toLocalDate() else st.toLocalDate().minusDays(1)
+            val lateFrom = nightDate.atTime(22, 0).atZone(zone).toInstant().toEpochMilli()
+            val lateTo = nightDate.plusDays(1).atTime(2, 0).atZone(zone).toInstant().toEpochMilli()
+
+            for (sess in sessions) {
+                if (sess.end < minOf(preFrom, lateFrom)) continue
+                if (sess.start > maxOf(gapStart, lateTo)) break
+                for (span in sess.spans) {
+                    if (span.pkg == launcher || span.pkg in system) continue
+                    val pre = overlap(span.start, span.end, preFrom, gapStart)
+                    val late = overlap(span.start, span.end, lateFrom, lateTo)
+                    if (pre <= 0 && late <= 0) continue
+                    val a = acc.getOrPut(span.pkg) { Acc() }
+                    if (pre > 0) { a.preMs += pre; a.preNights += gapStart; preTotalMs += pre }
+                    a.lateMs += late
+                }
+            }
+        }
+        if (nights == 0) return emptyList()
+
+        return acc.entries
+            .filter { it.value.preNights.size >= 2 || it.value.lateMs >= 20L * 60 * 1000 }
+            .map { (pkg, a) ->
+                NightHabitStat(
+                    label = label(pkg),
+                    preSleepSharePct = if (preTotalMs > 0)
+                        (a.preMs * 100.0 / preTotalMs).r2() else 0.0,
+                    preSleepNights = a.preNights.size,
+                    lateNightMinutesPerNight = (a.lateMs / 60_000.0 / nights).r2(),
+                    nightsObserved = nights,
+                )
+            }
+            .sortedByDescending { it.preSleepSharePct }
+            .take(8)
+    }
 
     /**
      * 화면 활동의 긴 공백을 수면 후보로 본다.

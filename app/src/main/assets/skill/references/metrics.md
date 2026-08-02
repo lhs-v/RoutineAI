@@ -34,6 +34,12 @@ notif_cleanup 의 원천. 앱 이름이 성격을 말한다 — 시스템·연�
 봤다"다. app_mode(수면 창 시청 모드)의 창 계산에 쓴다. / health 의
 sleep 세션이 있으면 교차 검증 — 둘이 맞으면 confidence 를 올릴 수 있다.
 
+**nightHabit** — 수면 직전 60분과 심야(22~02시)의 앱 습관. preSleepSharePct
+(직전 60분 점유율)·preSleepNights(등장 밤 수)·lateNightMinutesPerNight.
+app_mode 의 주 근거: "잠들기 전 마지막 화면의 주인"이 누구인지가 여기 있다.
+점유율이 높고 밤 수가 관측 밤의 절반을 넘으면 그 앱의 심야 경험 개선
+(편안하게 보기·방해 금지·회전 잠금)을 검토할 근거가 된다.
+
 **health** — Health Connect 세션 요약(워치→삼성 헬스 동기화). kind 는 "sleep"
 또는 "exercise:걷기" 형태, 세션 수·평균 길이·마지막 시작 시각. sleep(화면 공백
 추정)과 달리 **실측 기록**이다 — sleep 교차 검증과 trigger_routine(운동 시작·
