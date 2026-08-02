@@ -88,9 +88,17 @@ class DeepAnalyzer(private val ctx: Context) {
         val analysisNote: String,
     )
 
-    /** 정제할 거리가 있는가 — 버튼 활성화 판단용. */
-    suspend fun hasHistory(): Boolean = dao.allDecisionEvents()
-        .any { it.kind in DECISION_KINDS }
+    /**
+     * 정제할 거리가 있는가 — 버튼 활성화 판단용.
+     * refine() 과 같은 기준(비-dismissed 제안의 결정만)이어야 버튼이
+     * 켜졌는데 누르면 실패하는 어긋남이 없다.
+     */
+    suspend fun hasHistory(): Boolean {
+        val sigs = dao.proposals().filter { it.state != "dismissed" }
+            .map { it.signature }.toSet()
+        return dao.allDecisionEvents()
+            .any { it.kind in DECISION_KINDS && it.proposalSignature in sigs }
+    }
 
     suspend fun refine(cfg: AzureConfig, onStep: (String) -> Unit = {}): Result<Outcome> {
         onStep("결정 이력 모으는 중")
@@ -143,7 +151,7 @@ class DeepAnalyzer(private val ctx: Context) {
 
         // 브리프 카드 — 검증 통과분만 저장한다. 응답 버튼이 실제 동작(실험
         // 시작·취소)과 연결되므로 깨진 카드가 화면에 오르면 안 된다.
-        val cards = parsed.briefCards.filter { validCard(it) }.take(4)
+        val cards = parsed.briefCards.filter { validCard(it) }.take(3)
         Settings(ctx).lastBriefCards = encodeCards(cards)
 
         return Result.success(Outcome(refined, skipped, parsed.brief, parsed.analysisNote))
@@ -155,7 +163,7 @@ class DeepAnalyzer(private val ctx: Context) {
             val e = c.experiment ?: return false
             if (c.signature.isNullOrBlank() || e.hypothesis.isBlank()) return false
             if (e.conditionHours.isNullOrBlank() && e.conditionWeekdays.isNullOrBlank()) return false
-            if (!okSpec(e.conditionHours, 23) || !okSpec(e.conditionWeekdays, 7)) return false
+            if (!okHours(e.conditionHours) || !okWeekdays(e.conditionWeekdays)) return false
         }
         return true
     }
@@ -167,13 +175,26 @@ class DeepAnalyzer(private val ctx: Context) {
      * 이 파싱 예외로 죽을 수 있으므로 여기서 거른다.
      */
     private fun valid(r: LlmRefinement): Boolean =
-        okSpec(r.conditionHours, max = 23) && okSpec(r.conditionWeekdays, max = 7)
+        okHours(r.conditionHours) && okWeekdays(r.conditionWeekdays)
 
-    private fun okSpec(spec: String?, max: Int): Boolean {
+    /**
+     * hours: 단일값 0..23, 범위 끝은 24 허용("20-24"가 23시를 포함하는 표기),
+     * 자정 넘김("22-2")도 유효 — inCondition 이 둘 다 매칭한다.
+     * weekdays: 1..7 (월=1). 0(크론식 일요일)은 영원히 매칭 안 되므로 거부.
+     */
+    private fun okHours(spec: String?): Boolean = okSpec(spec, 0, 23, rangeEndMax = 24)
+    private fun okWeekdays(spec: String?): Boolean = okSpec(spec, 1, 7)
+
+    private fun okSpec(spec: String?, min: Int, max: Int, rangeEndMax: Int = max): Boolean {
         if (spec.isNullOrBlank()) return true
         return spec.split(',').all { part ->
-            val nums = part.trim().split('-')
-            nums.size in 1..2 && nums.all { n -> n.toIntOrNull()?.let { it in 0..max } == true }
+            val nums = part.trim().split('-').map { it.trim().toIntOrNull() }
+            when (nums.size) {
+                1 -> nums[0]?.let { it in min..max } == true
+                2 -> nums[0]?.let { it in min..max } == true &&
+                    nums[1]?.let { it in min..rangeEndMax } == true
+                else -> false
+            }
         }
     }
 
@@ -289,8 +310,9 @@ class DeepAnalyzer(private val ctx: Context) {
                                 put("kind", e.kind)
                                 // 도구(get_moment_context)로 이 순간을 파볼 수 있게
                                 put("ts", e.ts)
-                                put("hour", e.hour)
-                                put("weekday", e.weekday)
+                                // -1 은 맥락 없이 남은 옛 기록 — 보내면 오독한다
+                                if (e.hour >= 0) put("hour", e.hour)
+                                if (e.weekday >= 1) put("weekday", e.weekday)
                                 e.foregroundPkg?.let { put("foreground", it) }
                                 e.network?.let { put("network", it) }
                                 e.btDevice?.let { put("bt", it) }
@@ -311,6 +333,12 @@ class DeepAnalyzer(private val ctx: Context) {
             appendLine("시스템 프롬프트의 절차대로 조건을 정제하고, 출력 스키마의")
             appendLine("순수 JSON 객체 하나만 출력하세요.")
             appendLine()
+            val memory = Memory.read(ctx)
+            if (memory.isNotBlank()) {
+                appendLine("사용자 메모리 — 이전 분석들이 남긴 확인된 사실:")
+                appendLine(memory)
+                appendLine()
+            }
             appendLine("```json")
             appendLine(input.toString())
             appendLine("```")
@@ -388,6 +416,14 @@ class DeepAnalyzer(private val ctx: Context) {
                 put("hypothesis", str("사용자에게 보일 가설 한 문장"))
             },
             listOf("signature", "hypothesis"),
+        )
+        tool(
+            "remember",
+            "이 사용자에 대해 **반복 확인된 사실**을 개인 맥락 메모리에 한 줄로 남긴다. " +
+                "다음 분석들이 이 메모리를 읽고 시작한다. 추측·일회성 관찰 금지, " +
+                "입력의 '사용자 메모리'에 이미 있는 내용 금지",
+            buildJsonObject { put("text", str("확인된 사실 한 줄, 예: 증권 앱 확인은 장 운영 시간과 묶인다")) },
+            listOf("text"),
         )
         tool(
             "conclude_experiment",
@@ -470,6 +506,10 @@ class DeepAnalyzer(private val ctx: Context) {
             }
 
             "get_analysis_note" -> Settings(ctx).lastAnalysisNote.ifBlank { "분석 노트 없음" }
+
+            "remember" -> Memory.append(
+                ctx, args["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            )
 
             "get_experiments" -> {
                 val rows = dao.experiments()

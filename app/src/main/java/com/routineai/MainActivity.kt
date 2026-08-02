@@ -625,10 +625,10 @@ class MainActivity : ComponentActivity() {
                 val now = System.currentTimeMillis()
                 val dao = Db.get(ctx).dao()
                 dao.setProposalState(p.signature, state, now)
+                // 팝업 경로와 같은 관문(capture)을 지나야 결정 맥락이 남는다 —
+                // 기본값 행(hour=-1)은 심층 분석 입력을 오염시킨다(검토에서 확인).
                 dao.logProposalEvent(
-                    com.routineai.data.ProposalEventRow(
-                        ts = now, proposalSignature = p.signature, kind = eventKind
-                    )
+                    com.routineai.watch.DecisionContext.capture(ctx, p.signature, eventKind, ts = now)
                 )
                 withContext(Dispatchers.Main) { onChanged() }
             }
@@ -1617,7 +1617,10 @@ class MainActivity : ComponentActivity() {
                 enabled = !busy,
                 onClick = {
                     lifecycleScope.launch {
-                        withContext(Dispatchers.IO) { WatchStatus.resetProposals(ctx) }
+                        withContext(Dispatchers.IO) {
+                            WatchStatus.resetProposals(ctx)
+                            com.routineai.interpret.Memory.clear(ctx)
+                        }
                         prefs.clearReportAndAnalysis()
                         resetMsg = "리포트까지 지웠습니다. 대시보드 → 리포트 생성부터 시작하세요."
                         onChanged()

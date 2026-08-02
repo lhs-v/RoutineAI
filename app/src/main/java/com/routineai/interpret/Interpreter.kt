@@ -364,6 +364,12 @@ class Interpreter(private val ctx: Context) {
 
     private fun userPrompt(reportJson: String): String = buildString {
         appendLine("아래는 한 사용자의 스마트폰 사용 로그를 집계한 리포트입니다.")
+        val memory = Memory.read(ctx)
+        if (memory.isNotBlank()) {
+            appendLine()
+            appendLine("사용자 메모리 — 이전 분석들이 남긴 확인된 사실 (제안의 개인화에 참고):")
+            appendLine(memory)
+        }
         appendLine("시스템 프롬프트의 절차(지형도 → 품질 → 후보 발굴 → 맥락 판정 →")
         appendLine("교차 검증 → 제안 생성)를 그대로 따라 루틴 제안을 만드세요.")
         appendLine()
