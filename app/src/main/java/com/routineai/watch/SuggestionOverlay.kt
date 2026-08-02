@@ -2,15 +2,21 @@ package com.routineai.watch
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -43,7 +49,12 @@ object SuggestionOverlay {
     private var glow: View? = null
 
     private const val AUTO_HIDE_MS = 12_000L
-    private const val GLOW_MS = 600L
+
+    /** 일렁임 전체 길이. 두 번의 숨 뒤 옅은 상시 발광으로 가라앉는다. */
+    private const val GLOW_TOTAL_MS = 1_400L
+
+    /** 카드는 첫 숨이 지나 "알아챘다"가 전달된 뒤에 나온다. */
+    private const val CARD_DELAY_MS = 950L
 
     fun show(ctx: Context, p: ProposalRow, shortcut: Boolean, anchorPkg: String?) {
         if (!Applier.hasOverlay(ctx)) return
@@ -55,24 +66,23 @@ object SuggestionOverlay {
                 showCard(app, p, shortcut = true, anchorPkg = anchorPkg)
             } else {
                 showGlow(app)
-                main.postDelayed({ showCard(app, p, false, anchorPkg) }, GLOW_MS)
+                main.postDelayed({ showCard(app, p, false, anchorPkg) }, CARD_DELAY_MS)
             }
         }
     }
 
     // ------------------------------------------------------------------
 
-    /** 1단계: 테두리 발광. 터치를 통과시켜 아래 앱을 계속 쓸 수 있다. */
+    /**
+     * 1단계: 가장자리 광원. 터치를 통과시켜 아래 앱을 계속 쓸 수 있다.
+     *
+     * 선(스트로크)이 아니라 네 변에서 안쪽으로 번지는 빛이다 — 얇은 테두리는
+     * 실측에서 인지되지 못했다. 숨 쉬듯 두 번 일렁였다가 옅게 가라앉아,
+     * 카드가 떠 있는 동안 "지금 화면이 그 대상"임을 계속 알린다.
+     */
     private fun showGlow(ctx: Context) {
         val accent = Settings(ctx).accentColor()
-        val view = View(ctx).apply {
-            background = GradientDrawable().apply {
-                setStroke(dp(ctx, 3), accent)
-                cornerRadius = dp(ctx, 28).toFloat()
-                setColor(Color.TRANSPARENT)
-            }
-            alpha = 0f
-        }
+        val view = EdgeGlowView(ctx, accent)
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -84,11 +94,66 @@ object SuggestionOverlay {
         )
         runCatching { wm(ctx).addView(view, lp) }.onSuccess {
             glow = view
-            ValueAnimator.ofFloat(0f, 1f, 0.35f).apply {
-                duration = GLOW_MS
-                addUpdateListener { view.alpha = it.animatedValue as Float }
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = GLOW_TOTAL_MS
+                addUpdateListener { view.phase = it.animatedValue as Float }
                 start()
             }
+        }
+    }
+
+    /**
+     * 화면 가장자리에서 안쪽으로 번지는 빛.
+     *
+     * phase 0→1 동안 사인 파동 두 번을 타서 폭·밝기가 함께 오르내리고
+     * (일렁임), 끝에서는 옅은 상시 발광(alpha ≈ 0.12)으로 남는다.
+     * 단색 액센트만 쓴다 — 여러 색을 돌리면 알림이 아니라 광고처럼 읽힌다.
+     */
+    private class EdgeGlowView(ctx: Context, color: Int) : View(ctx) {
+        var phase = 0f
+            set(v) { field = v; invalidate() }
+
+        private val paint = Paint()
+        private val rgb = color and 0x00FFFFFF
+
+        /** 액센트를 흰색 쪽으로 끌어올린 심(core) 색 — 같은 색 계열 배경에서도
+         *  가장자리가 빛나는 선으로 읽히게 한다(실측: 틸 벽지에 틸 발광이 묻혔다). */
+        private val coreRgb = run {
+            val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
+            Color.rgb(
+                r + ((255 - r) * 0.65f).toInt(),
+                g + ((255 - g) * 0.65f).toInt(),
+                b + ((255 - b) * 0.65f).toInt(),
+            ) and 0x00FFFFFF
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+
+            // 숨 두 번: 0→1→0→1→0. 봉투가 진행에 따라 잦아들어
+            // 두 번째 숨은 첫 숨보다 옅다. 끝값은 상시 발광으로 수렴.
+            val breath = 0.5f - 0.5f * kotlin.math.cos(phase * 2f * Math.PI.toFloat() * 2f)
+            val envelope = 1f - 0.5f * phase
+            val strength = breath * envelope + 0.2f * phase
+            val glowW = (0.09f + 0.07f * breath) * minOf(w, h)
+
+            // 3단 그라데이션: 밝은 심 → 액센트 번짐 → 투명.
+            val core = ((strength * 230).toInt().coerceIn(0, 255) shl 24) or coreRgb
+            val bloom = ((strength * 160).toInt().coerceIn(0, 255) shl 24) or rgb
+            val colors = intArrayOf(core, bloom, Color.TRANSPARENT)
+            val stops = floatArrayOf(0f, 0.28f, 1f)
+
+            fun edge(x0: Float, y0: Float, x1: Float, y1: Float, l: Float, t: Float, r: Float, b: Float) {
+                paint.shader =
+                    LinearGradient(x0, y0, x1, y1, colors, stops, Shader.TileMode.CLAMP)
+                canvas.drawRect(l, t, r, b, paint)
+            }
+            edge(0f, 0f, 0f, glowW, 0f, 0f, w, glowW)               // 위
+            edge(0f, h, 0f, h - glowW, 0f, h - glowW, w, h)          // 아래
+            edge(0f, 0f, glowW, 0f, 0f, 0f, glowW, h)               // 왼쪽
+            edge(w, 0f, w - glowW, 0f, w - glowW, 0f, w, h)          // 오른쪽
         }
     }
 
@@ -197,9 +262,24 @@ object SuggestionOverlay {
 
         runCatching { wm(ctx).addView(root, lp) }.onSuccess {
             card = root
+            // 스르륵 나타나는 게 아니라 "톡 튀어나온다" — 오버슈트가 잠깐
+            // 커졌다 제자리를 찾는 그 반동이 등장을 사건으로 만든다.
+            // 미세 햅틱을 함께 줘서 눈이 다른 곳에 있어도 인지되게 한다.
             root.alpha = 0f
-            root.translationY = dp(ctx, 24).toFloat()
-            root.animate().alpha(1f).translationY(0f).setDuration(220).start()
+            root.translationY = dp(ctx, 34).toFloat()
+            root.scaleX = 0.92f
+            root.scaleY = 0.92f
+            root.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                .setDuration(340)
+                .setInterpolator(OvershootInterpolator(1.15f))
+                .withStartAction {
+                    root.performHapticFeedback(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                            HapticFeedbackConstants.CONFIRM
+                        else HapticFeedbackConstants.VIRTUAL_KEY
+                    )
+                }
+                .start()
             main.postDelayed({ dismiss(ctx) }, AUTO_HIDE_MS)
         }
     }
