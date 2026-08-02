@@ -42,7 +42,9 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         // 데모 로그는 만든 시점이 고정되어 있다. 지금 시각을 기준으로 잡으면
         // 며칠만 지나도 "최근 30일" 창 밖으로 빠져나가 전부 0 이 된다.
         // 그래서 데모에서는 데이터 자체의 마지막 시각을 기준으로 삼는다.
-        val now = if (demo) dao.lastEventTs() ?: System.currentTimeMillis()
+        // +1: 조회가 ts < to (배타)라 기준으로 삼은 마지막 이벤트 자신이
+        // 빠지는 off-by-one 을 막는다.
+        val now = if (demo) (dao.lastEventTs() ?: System.currentTimeMillis()) + 1
         else System.currentTimeMillis()
         // 관측 창의 시작을 사용 이벤트의 시작에 맞춘다. 통신량·헬스는 몇 달을
         // 소급하지만 사용 이벤트는 며칠뿐이라, 그대로 두면 지표마다 관측 창이
@@ -474,18 +476,22 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
 
         fun overlap(s: Long, e: Long, from: Long, to: Long) = maxOf(0L, minOf(e, to) - maxOf(s, from))
 
+        val seenNights = HashSet<LocalDate>()
         for (i in 0 until sessions.size - 1) {
             val gapStart = sessions[i].end
             val gapEnd = sessions[i + 1].start
             if ((gapEnd - gapStart).toDouble() / 3_600_000 < 3.0) continue
             val st = gapStart.toLocalDateTime()
             if (st.hour < 20 && st.hour >= 5) continue
+            // 같은 밤에 공백이 두 번(자다 깨서 확인) 생겨도 심야 창은 한 번만
+            // 센다 — 이중 가산되면 밤당 평균이 부풀려진다(검토에서 확인).
+            // 첫 공백 = 처음 잠든 시각이 그 밤의 대표다.
+            val nightDate = if (st.hour >= 20) st.toLocalDate() else st.toLocalDate().minusDays(1)
+            if (!seenNights.add(nightDate)) continue
             nights++
 
             // 수면 직전 60분
             val preFrom = gapStart - 60L * 60 * 1000
-            // 심야 창: 그 밤의 22:00 ~ 다음날 02:00
-            val nightDate = if (st.hour >= 20) st.toLocalDate() else st.toLocalDate().minusDays(1)
             val lateFrom = nightDate.atTime(22, 0).atZone(zone).toInstant().toEpochMilli()
             val lateTo = nightDate.plusDays(1).atTime(2, 0).atZone(zone).toInstant().toEpochMilli()
 

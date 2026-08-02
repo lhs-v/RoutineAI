@@ -38,7 +38,9 @@ object Experiments {
         val h = hours?.takeIf { it.isNotBlank() }
         val w = weekdays?.takeIf { it.isNotBlank() }
         if (h == null && w == null) return "conditionHours 또는 conditionWeekdays 가 필요합니다"
-        if (!okSpec(h, 23) || !okSpec(w, 7)) return "조건 형식이 잘못됐습니다 (예: \"9-16\", \"1-5\")"
+        if (!okSpec(h, 0, 23, rangeEndMax = 24) || !okSpec(w, 1, 7)) {
+            return "조건 형식이 잘못됐습니다 (예: \"9-16\", \"22-2\", \"1-5\")"
+        }
         if (hypothesis.isBlank()) return "hypothesis(사용자에게 보일 가설 한 문장)가 필요합니다"
 
         val d = days.coerceIn(3, 21)
@@ -105,11 +107,17 @@ object Experiments {
         return n
     }
 
-    private fun okSpec(spec: String?, max: Int): Boolean {
+    /** DeepAnalyzer.okSpec 과 같은 규약 — hours 는 끝 24·자정 넘김 허용, weekdays 는 1..7. */
+    private fun okSpec(spec: String?, min: Int, max: Int, rangeEndMax: Int = max): Boolean {
         if (spec.isNullOrBlank()) return true
         return spec.split(',').all { part ->
-            val nums = part.trim().split('-')
-            nums.size in 1..2 && nums.all { n -> n.toIntOrNull()?.let { it in 0..max } == true }
+            val nums = part.trim().split('-').map { it.trim().toIntOrNull() }
+            when (nums.size) {
+                1 -> nums[0]?.let { it in min..max } == true
+                2 -> nums[0]?.let { it in min..max } == true &&
+                    nums[1]?.let { it in min..rangeEndMax } == true
+                else -> false
+            }
         }
     }
 }

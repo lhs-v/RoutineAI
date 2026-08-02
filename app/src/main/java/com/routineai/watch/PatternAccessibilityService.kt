@@ -37,7 +37,12 @@ class PatternAccessibilityService : AccessibilityService() {
         lastPkg = pkg
         lastAt = now
 
-        scope.launch { PatternWatcher.onAppForeground(applicationContext, pkg) }
+        // 미포착 예외가 프로세스를 죽이지 않게 감싼다 — 폴링 경로와 달리
+        // 이 코루틴에는 지붕이 없다(검토에서 확인).
+        scope.launch {
+            runCatching { PatternWatcher.onAppForeground(applicationContext, pkg) }
+                .onFailure { android.util.Log.w("PatternA11y", "디스패치 실패", it) }
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -296,12 +301,19 @@ class PatternAccessibilityService : AccessibilityService() {
         /** 두 번째 앱을 고르는 화면의 제목 — 사라졌으면 선택이 먹혔다는 뜻 */
         private const val PICKER_TITLE = "앱 선택"
 
-        /** 사용자가 "앱을 열었다"고 느끼지 않는 표면들 */
+        /**
+         * 사용자가 "앱을 열었다"고 느끼지 않는 표면들.
+         * 키보드가 여기 있는 이유: TYPE_WINDOW_STATE_CHANGED 는 IME 창에도
+         * 발생해서, 검색창을 탭하는 순간이 "앱 전환"으로 처리되면 체류 측정과
+         * 모드 원복이 오염된다(검토에서 확인).
+         */
         private val IGNORED = setOf(
             "com.android.systemui",
             "android",
             "com.samsung.android.app.aodservice",
             "com.samsung.android.messaging.ui",
+            "com.samsung.android.honeyboard",
+            "com.google.android.inputmethod.latin",
         )
     }
 }

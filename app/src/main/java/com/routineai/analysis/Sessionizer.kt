@@ -201,11 +201,22 @@ object Sessionizer {
             spans = ArrayList()
         }
 
+        // 세션의 마지막 앱도 스팬으로 닫는다 — 안 닫으면 그 앱의 체류가
+        // 통째로 0 이 되고, 한 앱만 열고 내려놓는 세션은 빈 스팬이 된다
+        // (검토에서 확인: "상한까지 인정한다"는 주석이 실제론 0 으로 인정했다).
+        fun closeLast(p: UsageEventRow, end: Long) {
+            if (p.pkg != launcherPkg && end > p.ts) {
+                spans.add(AppSpan(p.pkg, p.ts, end, pendingLauncher))
+            }
+        }
+
         for (e in opens) {
             val p = prev
             if (p != null && e.ts - p.ts > GAP_SPLIT_MS) {
                 // 마지막 앱은 다음 이벤트까지가 아니라 상한까지만 인정한다.
-                flush(minOf(p.ts + MAX_FOREGROUND_MS, p.ts + GAP_SPLIT_MS))
+                val end = minOf(p.ts + MAX_FOREGROUND_MS, p.ts + GAP_SPLIT_MS)
+                closeLast(p, end)
+                flush(end)
                 start = e.ts
                 pendingLauncher = false
             } else if (p != null && p.pkg != launcherPkg) {
@@ -216,7 +227,11 @@ object Sessionizer {
             }
             prev = e
         }
-        prev?.let { flush(it.ts + 60_000) }
+        prev?.let {
+            val end = it.ts + 60_000
+            closeLast(it, end)
+            flush(end)
+        }
         return out
     }
 }

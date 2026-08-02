@@ -48,6 +48,10 @@ object SuggestionOverlay {
     private var card: View? = null
     private var glow: View? = null
 
+    /** 예약됐지만 아직 안 뜬 카드. dismiss 가 취소하지 않으면 950ms 안에
+     *  다음 제안이 올 때 먼저 예약된 카드가 고아로 남는다(검토에서 확인). */
+    private var pendingCard: Runnable? = null
+
     private const val AUTO_HIDE_MS = 12_000L
 
     /** 일렁임 전체 길이. 두 번의 숨 뒤 옅은 상시 발광으로 가라앉는다. */
@@ -66,7 +70,12 @@ object SuggestionOverlay {
                 showCard(app, p, shortcut = true, anchorPkg = anchorPkg)
             } else {
                 showGlow(app)
-                main.postDelayed({ showCard(app, p, false, anchorPkg) }, CARD_DELAY_MS)
+                val r = Runnable {
+                    pendingCard = null
+                    showCard(app, p, false, anchorPkg)
+                }
+                pendingCard = r
+                main.postDelayed(r, CARD_DELAY_MS)
             }
         }
     }
@@ -362,6 +371,8 @@ object SuggestionOverlay {
     }
 
     fun dismiss(ctx: Context) {
+        pendingCard?.let { main.removeCallbacks(it) }
+        pendingCard = null
         card?.let { v -> runCatching { wm(ctx).removeView(v) } }
         glow?.let { v -> runCatching { wm(ctx).removeView(v) } }
         card = null

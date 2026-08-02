@@ -6,6 +6,8 @@ import com.routineai.data.Db
 import com.routineai.data.KvRow
 import com.routineai.data.ProposalEventRow
 import com.routineai.data.ProposalRow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -139,7 +141,7 @@ object PatternWatcher {
      * 감시 루프가 주기적으로 부른다. 전환 없이 상한까지 머문 경우를 확정한다 —
      * 그 이상은 "충분히 오래"라 더 셀 필요가 없다.
      */
-    suspend fun evaluateOutcomes(ctx: Context) {
+    suspend fun evaluateOutcomes(ctx: Context) = gate.withLock {
         val now = System.currentTimeMillis()
         val capped = synchronized(pendingOutcomes) {
             val d = pendingOutcomes.filter { now - it.at >= OUTCOME_CAP_S * 1000L }
@@ -154,7 +156,15 @@ object PatternWatcher {
         }
     }
 
-    suspend fun onAppForeground(ctx: Context, pkg: String) {
+    /**
+     * 진입 직렬화. 접근성(이벤트별 코루틴)·폴링 루프·오버레이가 서로 다른
+     * 스레드에서 들어오는데, activeModes·pending* ·lastForegroundPkg 는
+     * 일반 컬렉션이다 — 동시 진입이 ConcurrentModificationException 이나
+     * 모드 원복 유실로 이어질 수 있어(검토에서 확인) 문 하나로 세운다.
+     */
+    private val gate = Mutex()
+
+    suspend fun onAppForeground(ctx: Context, pkg: String) = gate.withLock {
         // 모드 복구와 앵커 갱신은 멱등이라 관문 앞에서 한다 — 중복 보고가
         // 와도 같은 앱이면 되돌릴 것도, 바뀔 것도 없다.
         val leaving = activeModes.keys.filter { it != pkg }
@@ -187,22 +197,28 @@ object PatternWatcher {
     suspend fun onBluetooth(ctx: Context, connected: Boolean, name: String) {
         BtState.update(name, connected)
         val type = if (connected) "bt_connect" else "bt_disconnect"
-        signal(ctx, type, name) { it.triggerParam.isNullOrBlank() || it.triggerParam == name }
+        gate.withLock {
+            signal(ctx, type, name) { it.triggerParam.isNullOrBlank() || it.triggerParam == name }
+        }
     }
 
     suspend fun onNetwork(ctx: Context, wifi: Boolean, alias: String?) {
         val type = if (wifi) "wifi_connect" else "wifi_disconnect"
-        signal(ctx, type, alias) { it.triggerParam.isNullOrBlank() || it.triggerParam == alias }
+        gate.withLock {
+            signal(ctx, type, alias) { it.triggerParam.isNullOrBlank() || it.triggerParam == alias }
+        }
     }
 
     /** @param hhmm "HH:mm" — proposal-rules.md 의 time 트리거 형식과 같다 */
     suspend fun onTime(ctx: Context, hhmm: String) {
-        signal(ctx, "time", hhmm) { it.triggerParam == hhmm }
+        gate.withLock { signal(ctx, "time", hhmm) { it.triggerParam == hhmm } }
     }
 
     suspend fun onExercise(ctx: Context, name: String) {
-        signal(ctx, "exercise_start", name) {
-            it.triggerParam.isNullOrBlank() || it.triggerParam == name
+        gate.withLock {
+            signal(ctx, "exercise_start", name) {
+                it.triggerParam.isNullOrBlank() || it.triggerParam == name
+            }
         }
     }
 
@@ -222,14 +238,17 @@ object PatternWatcher {
         val key = "$triggerType:${param.orEmpty()}"
         synchronized(recentSignals) {
             val last = recentSignals[key]
+            // 중복으로 접을 때는 시각을 갱신하지 않는다 — 갱신하면 창이
+            // 계속 미끄러져(접근성이 앱 내부 화면 전환마다 재보고) 진짜
+            // 재진입까지 삼킨다(검토에서 확인). 창은 마지막 '통과' 기준이다.
+            if (last != null && now - last < SIGNAL_DEDUP_MS) {
+                Log.i(TAG, "중복 신호 접음: $key")
+                return
+            }
             recentSignals[key] = now
             // 오래된 키가 무한히 쌓이지 않게 이따금 청소한다.
             if (recentSignals.size > 64) {
                 recentSignals.entries.removeAll { now - it.value > 60_000 }
-            }
-            if (last != null && now - last < SIGNAL_DEDUP_MS) {
-                Log.i(TAG, "중복 신호 접음: $key")
-                return
             }
         }
         dispatch(ctx, triggerType, param, paramMatches)
@@ -318,24 +337,38 @@ object PatternWatcher {
         now - (p.lastSurfacedAt ?: 0L) >= REPEAT_GAP_MS
 
     /** P3 가 조건을 좁혀두었으면 그 조건 밖에서는 뜨지 않는다 */
-    private fun inCondition(p: ProposalRow, here: ProposalEventRow): Boolean {
-        p.conditionHours?.let { spec ->
-            val ok = spec.split(',').any { part ->
-                val r = part.trim().split('-')
-                if (r.size == 2) here.hour >= r[0].toInt() && here.hour < r[1].toInt()
-                else here.hour == part.trim().toIntOrNull()
+    private fun inCondition(p: ProposalRow, here: ProposalEventRow): Boolean =
+        matchesSpec(p.conditionHours, here.hour, endInclusive = false, wrap = true) &&
+            matchesSpec(p.conditionWeekdays, here.weekday, endInclusive = true, wrap = false)
+
+    /**
+     * 조건 문자열은 LLM 이 쓴다 — 방어적으로 파싱한다. 깨진 부분은 무시하고,
+     * 전부 깨졌으면 조건 없음으로 본다: 잘못된 조건 하나가 루틴을 영영
+     * 죽이는 것(검토에서 확인)보다 조건을 무시하는 쪽이 낫다.
+     *
+     * hours 는 끝 미포함("9-16")에 자정 넘김("22-2")을 지원하고, weekdays 는
+     * 끝 포함("1-5" = 월~금)이다.
+     */
+    private fun matchesSpec(spec: String?, v: Int, endInclusive: Boolean, wrap: Boolean): Boolean {
+        spec ?: return true
+        var sawValid = false
+        for (part in spec.split(',')) {
+            val r = part.trim().split('-')
+            val a = r.getOrNull(0)?.trim()?.toIntOrNull()
+            if (r.size == 2) {
+                val b = r[1].trim().toIntOrNull()
+                if (a == null || b == null) continue
+                sawValid = true
+                val inFwd = v >= a && (if (endInclusive) v <= b else v < b)
+                val hit = if (a <= b) inFwd
+                else wrap && (v >= a || (if (endInclusive) v <= b else v < b))
+                if (hit) return true
+            } else if (a != null) {
+                sawValid = true
+                if (v == a) return true
             }
-            if (!ok) return false
         }
-        p.conditionWeekdays?.let { spec ->
-            val ok = spec.split(',').any { part ->
-                val r = part.trim().split('-')
-                if (r.size == 2) here.weekday >= r[0].toInt() && here.weekday <= r[1].toInt()
-                else here.weekday == part.trim().toIntOrNull()
-            }
-            if (!ok) return false
-        }
-        return true
+        return !sawValid
     }
 
     /**
@@ -343,7 +376,7 @@ object PatternWatcher {
      * 걸어두는 유일한 통로다. 자동 실행이 없어졌으므로 적용 지점이 직접
      * 알려줘야 한다(이걸 빼먹으면 회전 잠금이 영영 안 풀린다).
      */
-    suspend fun onModeApplied(ctx: Context, p: ProposalRow) = rememberMode(ctx, p)
+    suspend fun onModeApplied(ctx: Context, p: ProposalRow) = gate.withLock { rememberMode(ctx, p) }
 
     private suspend fun rememberMode(ctx: Context, p: ProposalRow) {
         Applier.params(p).firstOrNull()?.let { activeModes[it] = p }
@@ -371,20 +404,26 @@ object PatternWatcher {
         Db.get(ctx).dao().put(KvRow(KEY_ACTIVE_MODES, Json.encodeToString(map)))
     }
 
-    /** 감시 서비스가 뜰 때 한 번 — 지난 프로세스가 못 되돌린 모드를 되돌린다. */
-    suspend fun restoreModes(ctx: Context) {
+    /**
+     * 감시 서비스가 뜰 때 한 번 — 지난 프로세스가 못 되돌린 모드를 되돌린다.
+     * 이 프로세스가 아직 추적 중인 모드(서비스만 껐다 켠 경우)는 고아가
+     * 아니므로 건드리지 않는다 — 사용 중인 방해금지가 소리 없이 풀리면 안 된다.
+     */
+    suspend fun restoreModes(ctx: Context) = gate.withLock {
         val dao = Db.get(ctx).dao()
-        val raw = dao.get(KEY_ACTIVE_MODES) ?: return
+        val raw = dao.get(KEY_ACTIVE_MODES) ?: return@withLock
         val map = runCatching { Json.decodeFromString<Map<String, String>>(raw) }
             .getOrDefault(emptyMap())
-        if (map.isEmpty()) return
+        if (map.isEmpty()) return@withLock
+        val alive = activeModes.values.map { it.signature }.toSet()
         for ((_, sig) in map) {
+            if (sig in alive) continue
             dao.proposal(sig)?.let {
                 Log.i(TAG, "지난 세션의 모드 복구: ${it.oneLine}")
                 revertMode(ctx, it)
             }
         }
-        dao.put(KvRow(KEY_ACTIVE_MODES, "{}"))
+        persistModes(ctx)   // 현재 메모리 상태로 KV 재동기화
     }
 
     private const val KEY_ACTIVE_MODES = "active_modes"
