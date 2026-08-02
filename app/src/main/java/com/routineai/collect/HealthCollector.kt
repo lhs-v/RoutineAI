@@ -27,8 +27,9 @@ class HealthCollector(private val ctx: Context) {
 
     private val dao = Db.get(ctx).dao()
 
-    suspend fun collect(from: Long, to: Long) {
-        if (!isAvailable(ctx)) return
+    /** @return 이번에 읽은 세션 수. 권한·모듈이 없으면 0 */
+    suspend fun collect(from: Long, to: Long): Int {
+        if (!isAvailable(ctx)) return 0
         val client = HealthConnectClient.getOrCreate(ctx)
         val granted = runCatching {
             client.permissionController.getGrantedPermissions()
@@ -86,6 +87,7 @@ class HealthCollector(private val ctx: Context) {
         }
 
         if (rows.isNotEmpty()) dao.insertHealth(rows)
+        return rows.size
     }
 
     private fun exerciseName(type: Int): String = when (type) {

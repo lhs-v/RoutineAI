@@ -393,6 +393,15 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 device = android.os.Build.MODEL,
             ),
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
+            health = healthSessions.groupBy { it.kind }.map { (k, list) ->
+                HealthStat(
+                    kind = k,
+                    sessions = list.size,
+                    meanMinutes = list.map { (it.tsEnd - it.tsStart) / 60_000.0 }
+                        .average().r2(),
+                    lastStart = list.maxOf { it.tsStart },
+                )
+            }.sortedByDescending { it.sessions },
             transitions = transitions, appPairs = appPairs,
             eventChains = eventChains, appContext = appContext,
             coUse = coUse, firstApps = first,

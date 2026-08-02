@@ -223,6 +223,20 @@ window.renderReport=function(D){
     sleepChart($("c_sleep"),D.sleep);
   }
 
+  /* 수면·운동 세션 (Health Connect) */
+  if((D.health||[]).length){
+    const hd=t=>{const d=new Date(t);
+      return `${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`};
+    add(`<h2>수면·운동 세션 — Health Connect</h2><div class="card">
+      <div class="scroll"><table><thead><tr><th>종류</th><th>세션</th>
+      <th>평균 길이</th><th>마지막</th></tr></thead><tbody>`+
+      D.health.map(h=>`<tr><td>${h.kind==="sleep"?"수면":"운동 · "+h.kind.replace("exercise:","")}</td>
+        <td>${h.sessions}회</td><td>${r1(h.meanMinutes)}분</td><td>${hd(h.lastStart)}</td></tr>`).join("")+
+      `</tbody></table></div>
+      <p class="empty">워치가 삼성 헬스에 남긴 세션이 Health Connect 로 동기화된 것입니다.
+      위의 "폰을 놓은 구간"과 달리 실제 수면·운동 기록입니다.</p></div>`);
+  }
+
   /* 앱 */
   if(D.apps.length){
     add(`<h2>앱별 하루 사용 시간</h2><div class="card"><figure>

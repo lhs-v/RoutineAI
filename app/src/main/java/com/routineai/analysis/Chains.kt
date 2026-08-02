@@ -73,6 +73,10 @@ object Chains {
                 val name = h.kind.removePrefix("exercise:")
                 out += h.tsStart to "운동 시작:$name"
                 out += h.tsEnd to "운동 종료:$name"
+            } else if (h.kind == "sleep") {
+                // 기상 직후 첫 앱은 아침 루틴의 재료다. 수면 시작은 트리거로
+                // 의미가 없어(자는 중엔 행동이 없다) 종료만 넣는다.
+                out += h.tsEnd to "수면 종료"
             }
         }
         return out.sortedBy { it.first }

@@ -15,6 +15,12 @@ data class Report(
     val hourly: List<HourStat>,
     val apps: List<AppStat>,
     val sleep: List<SleepStat>,
+    /**
+     * Health Connect 세션 요약(수면·운동). 세션이 연쇄 임계(횟수≥3)에 못
+     * 미쳐도 여기엔 나온다 — "수집이 흐르고 있는가"가 보이지 않으면
+     * 권한 문제와 구분할 수 없다(실제로 그래서 헤맸다).
+     */
+    val health: List<HealthStat> = emptyList(),
     val transitions: List<TransitionStat>,
     val appPairs: List<AppPairStat>,
     val eventChains: List<ChainStat>,
@@ -144,6 +150,16 @@ data class AppStat(
      * 해석하는 쪽이 "매일 비슷했는가, 하루가 튀었는가"를 직접 확인할 수 있다.
      */
     val dailyMinutes: List<Double>,
+)
+
+/** Health Connect 세션 종류별 요약. kind: "sleep" | "exercise:걷기" */
+@Serializable
+data class HealthStat(
+    val kind: String,
+    val sessions: Int,
+    val meanMinutes: Double,
+    /** 마지막 세션 시작 시각 — 동기화가 살아 있는지의 증거 */
+    val lastStart: Long,
 )
 
 @Serializable

@@ -380,12 +380,21 @@ class MainActivity : ComponentActivity() {
                             onCollect = {
                                 busy = true; step = "이벤트 읽는 중"
                                 lifecycleScope.launch {
+                                    // 수동 수집도 워커와 같은 소스를 전부 돌아야 한다.
+                                    // 건강만 빠져 있어서 "권한을 줬는데 왜 안 쌓이지"를
+                                    // 만들었다(실측) — 워커의 6시간 주기를 기다려야 했다.
+                                    var healthRead = 0
                                     val r = withContext(Dispatchers.IO) {
                                         NetworkCollector(ctx).recordCurrentNetwork()
+                                        healthRead = HealthCollector(ctx).collect(
+                                            System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000,
+                                            System.currentTimeMillis(),
+                                        )
                                         UsageCollector(ctx).collect()
                                     }
                                     collectMsg = buildString {
                                         appendLine("이번에 읽은 이벤트 ${r.scanned}건")
+                                        appendLine("수면·운동 세션 ${healthRead}건")
                                         appendLine("DB 누적 ${r.totalStored}건")
                                         r.oldestStored?.let {
                                             appendLine("가장 오래된 기록 ${fmt(it)}")
