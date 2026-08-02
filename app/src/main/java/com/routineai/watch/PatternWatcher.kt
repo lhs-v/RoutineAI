@@ -3,8 +3,11 @@ package com.routineai.watch
 import android.content.Context
 import android.util.Log
 import com.routineai.data.Db
+import com.routineai.data.KvRow
 import com.routineai.data.ProposalEventRow
 import com.routineai.data.ProposalRow
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * 트리거 매칭의 두뇌.
@@ -50,6 +53,7 @@ object PatternWatcher {
         for (key in leaving) {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
         }
+        if (leaving.isNotEmpty()) persistModes(ctx)
         lastForegroundPkg = pkg
         // 앱페어는 둘 중 아무 쪽을 열어도 성립한다. triggerParam 하나로만
         // 매칭하면 한쪽에서만 뜨는데, 실제로 그래서 토스에서는 안 떴다.
@@ -68,6 +72,17 @@ object PatternWatcher {
     suspend fun onNetwork(ctx: Context, wifi: Boolean, alias: String?) {
         val type = if (wifi) "wifi_connect" else "wifi_disconnect"
         dispatch(ctx, type, alias) { it.triggerParam.isNullOrBlank() || it.triggerParam == alias }
+    }
+
+    /** @param hhmm "HH:mm" — proposal-rules.md 의 time 트리거 형식과 같다 */
+    suspend fun onTime(ctx: Context, hhmm: String) {
+        dispatch(ctx, "time", hhmm) { it.triggerParam == hhmm }
+    }
+
+    suspend fun onExercise(ctx: Context, name: String) {
+        dispatch(ctx, "exercise_start", name) {
+            it.triggerParam.isNullOrBlank() || it.triggerParam == name
+        }
     }
 
     // ------------------------------------------------------------------
@@ -91,7 +106,7 @@ object PatternWatcher {
             if (!inCondition(p, here)) continue
             if (p.autoRun) {
                 val r = Applier.apply(ctx, p, anchor = lastForegroundPkg)
-                if (p.category == "app_mode" && r.ok) rememberMode(p)
+                if (p.category == "app_mode" && r.ok) rememberMode(ctx, p)
                 dao.logProposalEvent(
                     DecisionContext.capture(
                         ctx, p.signature,
@@ -190,8 +205,9 @@ object PatternWatcher {
         return true
     }
 
-    private fun rememberMode(p: ProposalRow) {
+    private suspend fun rememberMode(ctx: Context, p: ProposalRow) {
         Applier.params(p).firstOrNull()?.let { activeModes[it] = p }
+        persistModes(ctx)
     }
 
     private fun revertMode(ctx: Context, p: ProposalRow) {
@@ -201,4 +217,35 @@ object PatternWatcher {
         }
         Log.i(TAG, "모드 원복: ${p.oneLine}")
     }
+
+    // ------------------------------------------------------------------
+
+    /**
+     * 걸어둔 모드를 KV 에도 남긴다. 메모리에만 두면 프로세스가 죽는 순간
+     * "누가 회전 잠금을 걸었는지"를 아무도 모르게 되고, 사용자 설정이 바뀐 채
+     * 남는다 — 이탈 복구는 선택이 아니라 필수라는 원칙이 재시작을 건너서도
+     * 지켜져야 한다.
+     */
+    private suspend fun persistModes(ctx: Context) {
+        val map: Map<String, String> = activeModes.mapValues { it.value.signature }
+        Db.get(ctx).dao().put(KvRow(KEY_ACTIVE_MODES, Json.encodeToString(map)))
+    }
+
+    /** 감시 서비스가 뜰 때 한 번 — 지난 프로세스가 못 되돌린 모드를 되돌린다. */
+    suspend fun restoreModes(ctx: Context) {
+        val dao = Db.get(ctx).dao()
+        val raw = dao.get(KEY_ACTIVE_MODES) ?: return
+        val map = runCatching { Json.decodeFromString<Map<String, String>>(raw) }
+            .getOrDefault(emptyMap())
+        if (map.isEmpty()) return
+        for ((_, sig) in map) {
+            dao.proposal(sig)?.let {
+                Log.i(TAG, "지난 세션의 모드 복구: ${it.oneLine}")
+                revertMode(ctx, it)
+            }
+        }
+        dao.put(KvRow(KEY_ACTIVE_MODES, "{}"))
+    }
+
+    private const val KEY_ACTIVE_MODES = "active_modes"
 }

@@ -12,7 +12,9 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import com.routineai.MainActivity
+import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
+import com.routineai.data.Db
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +42,11 @@ class WatchService : Service() {
     private var cursor = 0L
     private var btConnected: Set<String> = emptySet()
     private var btInitialized = false
+    /** "wifi:<SSID>" | "cellular" | "none". null 이면 아직 첫 폴링 전 */
+    private var netState: String? = null
+    private var lastMinute: String? = null
+    private var lastExercisePoll = 0L
+    private val firedExercise = HashSet<Long>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -49,9 +56,16 @@ class WatchService : Service() {
         isRunning = true
         cursor = System.currentTimeMillis()
         loop = scope.launch {
+            // 프로세스가 죽으면 메모리의 모드 추적이 사라진다 — 지난 세션이
+            // 바꿔둔 설정이 있으면 남의 설정을 바꿔놓은 채가 되므로 먼저 되돌린다.
+            runCatching { PatternWatcher.restoreModes(applicationContext) }
+                .onFailure { Log.w(TAG, "모드 복구 실패", it) }
             while (isActive) {
                 runCatching { poll() }.onFailure { Log.w(TAG, "폴링 실패", it) }
                 runCatching { pollBluetooth() }.onFailure { Log.w(TAG, "BT 폴링 실패", it) }
+                runCatching { pollNetwork() }.onFailure { Log.w(TAG, "네트워크 폴링 실패", it) }
+                runCatching { pollTime() }.onFailure { Log.w(TAG, "시간 트리거 실패", it) }
+                runCatching { pollExercise() }.onFailure { Log.w(TAG, "운동 폴링 실패", it) }
                 delay(POLL_MS)
             }
         }
@@ -95,20 +109,23 @@ class WatchService : Service() {
      */
     private suspend fun pollBluetooth() {
         val now = connectedDevices()
-        if (now == btConnected) return
-        val added = now - btConnected
-        val removed = btConnected - now
-        val first = !btInitialized
-        btInitialized = true
-        btConnected = now
 
-        if (first) {
-            // 시작 시점의 상태는 기록만 하고 트리거하지 않는다 —
-            // "방금 연결했다"가 아니라 "원래 연결돼 있었다"이기 때문이다.
+        // 첫 폴링은 **빈 상태여도** 초기화로 친다. 상태 변화가 있을 때만
+        // 초기화하면, 아무것도 없이 시작한 뒤의 첫 연결이 "원래 연결돼
+        // 있었다"로 오인되어 트리거가 삼켜진다(연결이 상시인 워치가 있어야만
+        // 통과하던 버그).
+        if (!btInitialized) {
+            btInitialized = true
+            btConnected = now
             now.forEach { BtState.update(it, true) }
             Log.i(TAG, "BT 초기 상태: ${now.joinToString().ifEmpty { "연결 없음" }}")
             return
         }
+        if (now == btConnected) return
+        val added = now - btConnected
+        val removed = btConnected - now
+        btConnected = now
+
         for (name in added) {
             Log.i(TAG, "BT 연결 감지: $name")
             PatternWatcher.onBluetooth(applicationContext, true, name)
@@ -116,6 +133,87 @@ class WatchService : Service() {
         for (name in removed) {
             Log.i(TAG, "BT 해제 감지: $name")
             PatternWatcher.onBluetooth(applicationContext, false, name)
+        }
+    }
+
+    /**
+     * Wi-Fi 접속 변화를 트리거로 환산한다. 별칭(Wi-Fi A, B…)은 리포트를
+     * 만드는 [com.routineai.analysis.Analyzer] 와 같은 규칙 — net_change
+     * 등장 순서 — 로 계산해야 제안의 triggerParam 과 맞아떨어진다.
+     */
+    private suspend fun pollNetwork() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+            as android.net.ConnectivityManager
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        val kind = when {
+            caps == null -> "none"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "other"
+        }
+        val ssid = if (kind == "wifi") NetworkCollector(applicationContext).currentSsid() else null
+        val state = if (kind == "wifi") "wifi:${ssid.orEmpty()}" else kind
+
+        if (netState == null) { netState = state; return }   // 시작 상태는 트리거 아님
+        if (state == netState) return
+        val prev = netState!!
+        netState = state
+
+        // 실시간으로 잡았으니 장소 축 로그도 그 자리에서 남긴다.
+        NetworkCollector(applicationContext).recordCurrentNetwork()
+
+        if (state.startsWith("wifi:")) {
+            val alias = wifiAlias(ssid)
+            Log.i(TAG, "Wi-Fi 연결 감지: $alias")
+            PatternWatcher.onNetwork(applicationContext, true, alias)
+        } else if (prev.startsWith("wifi:")) {
+            val alias = wifiAlias(prev.removePrefix("wifi:").ifBlank { null })
+            Log.i(TAG, "Wi-Fi 해제 감지: $alias")
+            PatternWatcher.onNetwork(applicationContext, false, alias)
+        }
+    }
+
+    /** SSID → 리포트와 같은 별칭. 변화 순간에만 불려 전체 조회 비용을 감수한다. */
+    private suspend fun wifiAlias(ssid: String?): String {
+        val changes = Db.get(applicationContext).dao().netChanges(0, System.currentTimeMillis())
+        val alias = LinkedHashMap<String, String>()
+        changes.filter { it.kind == "wifi" }.forEach { r ->
+            alias.getOrPut(r.ssid ?: "wifi-unknown") { "Wi-Fi " + ('A' + alias.size) }
+        }
+        return alias[ssid ?: "wifi-unknown"] ?: "Wi-Fi"
+    }
+
+    /** 분이 바뀌는 순간 시간 트리거를 확인한다. triggerParam 형식은 "HH:mm". */
+    private suspend fun pollTime() {
+        val t = java.time.LocalTime.now()
+        val hhmm = "%02d:%02d".format(t.hour, t.minute)
+        if (hhmm == lastMinute) return
+        val first = lastMinute == null
+        lastMinute = hhmm
+        if (first) return   // 서비스가 뜬 순간의 분은 "그 시각이 됐다"가 아니다
+        PatternWatcher.onTime(applicationContext, hhmm)
+    }
+
+    /**
+     * 운동 시작을 트리거로 환산한다. Health Connect 에는 실시간 콜백이 없어
+     * 주기 조회로 근사한다 — 세션이 동기화되는 시차만큼 늦게 잡히는 한계는
+     * 플랫폼의 것이다. 권한이 없으면 collect 가 조용히 아무것도 안 한다.
+     */
+    private suspend fun pollExercise() {
+        val now = System.currentTimeMillis()
+        if (now - lastExercisePoll < EXERCISE_POLL_MS) return
+        lastExercisePoll = now
+        val lookback = now - 2 * EXERCISE_POLL_MS
+        runCatching {
+            com.routineai.collect.HealthCollector(applicationContext).collect(lookback, now)
+        }
+        val dao = Db.get(applicationContext).dao()
+        for (s in dao.healthSessions(lookback, now)) {
+            if (!s.kind.startsWith("exercise:")) continue
+            if (!firedExercise.add(s.tsStart)) continue
+            val name = s.kind.removePrefix("exercise:")
+            Log.i(TAG, "운동 시작 감지: $name")
+            PatternWatcher.onExercise(applicationContext, name)
         }
     }
 
@@ -179,6 +277,9 @@ class WatchService : Service() {
 
         /** 1.5초면 "그 순간"으로 느껴지고 배터리 부담도 작다. */
         private const val POLL_MS = 1_500L
+
+        /** Health Connect 조회는 무거워서 별도 주기로 돈다. */
+        private const val EXERCISE_POLL_MS = 60_000L
 
         private val IGNORED = setOf(
             "com.android.systemui", "android",

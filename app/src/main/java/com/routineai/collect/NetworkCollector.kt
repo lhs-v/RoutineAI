@@ -122,7 +122,8 @@ class NetworkCollector(private val ctx: Context) {
         )
     }
 
-    private fun currentSsid(): String? = try {
+    /** 감시 서비스도 같은 방식으로 SSID 를 읽어야 별칭이 일치한다. */
+    fun currentSsid(): String? = try {
         val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION")
         wm.connectionInfo.ssid?.trim('"')?.takeIf { it.isNotBlank() && it != "<unknown ssid>" }
