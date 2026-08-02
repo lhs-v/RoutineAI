@@ -132,11 +132,10 @@ object SuggestionOverlay {
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            // 숨 두 번: 0→1→0→1→0. 봉투가 진행에 따라 잦아들어
-            // 두 번째 숨은 첫 숨보다 옅다. 끝값은 상시 발광으로 수렴.
-            val breath = 0.5f - 0.5f * kotlin.math.cos(phase * 2f * Math.PI.toFloat() * 2f)
-            val envelope = 1f - 0.5f * phase
-            val strength = breath * envelope + 0.2f * phase
+            // 숨 한 번: 0→1→0. 두 번은 반짝임(경고등)으로 읽혔다(실측 피드백).
+            // 크게 한 번 차올랐다가 옅은 상시 발광으로 가라앉는다.
+            val breath = 0.5f - 0.5f * kotlin.math.cos(phase * 2f * Math.PI.toFloat())
+            val strength = breath + 0.2f * phase
             val glowW = (0.09f + 0.07f * breath) * minOf(w, h)
 
             // 3단 그라데이션: 밝은 심 → 액센트 번짐 → 투명.
