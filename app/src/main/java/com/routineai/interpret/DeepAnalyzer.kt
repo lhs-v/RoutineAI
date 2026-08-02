@@ -173,6 +173,7 @@ class DeepAnalyzer(private val ctx: Context) {
                                 e.foregroundPkg?.let { put("foreground", it) }
                                 e.network?.let { put("network", it) }
                                 e.btDevice?.let { put("bt", it) }
+                                e.choice?.let { put("choice", it) }
                             })
                         }
                     })

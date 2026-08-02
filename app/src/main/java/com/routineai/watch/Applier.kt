@@ -51,10 +51,12 @@ object Applier {
     /**
      * @param anchor 지금 화면에 떠 있는 앱. 앱페어에서 "이미 열린 쪽은 다시
      *   띄우지 않기" 위해 쓴다.
+     * @param chosen 선택지 숏컷에서 사용자가 고른 패키지. launch_app 의
+     *   params 가 여럿일 때만 의미가 있고, 없으면 1순위를 쓴다.
      */
-    fun apply(ctx: Context, p: ProposalRow, anchor: String? = null): Result = when (p.actionType) {
+    fun apply(ctx: Context, p: ProposalRow, anchor: String? = null, chosen: String? = null): Result = when (p.actionType) {
         "app_pair" -> appPair(ctx, params(p), anchor)
-        "launch_app" -> launch(ctx, params(p).firstOrNull())
+        "launch_app" -> launch(ctx, chosen ?: params(p).firstOrNull())
         "mode_rotation" -> rotation(ctx, on = true)
         "mode_dnd" -> dnd(ctx, on = true)
         "notif_channel_off" -> notifSettings(ctx, params(p).firstOrNull())

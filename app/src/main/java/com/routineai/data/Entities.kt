@@ -203,6 +203,13 @@ data class ProposalEventRow(
     /** "wifi:Wi-Fi A" | "cellular" | null */
     val network: String? = null,
     val btDevice: String? = null,
+
+    /**
+     * 선택지 숏컷에서 무엇을 골랐는가(패키지명). 단일 액션이면 null.
+     * "이어버즈 → Music 또는 YouTube" 같은 제안에서 선택이 갈리는 축
+     * (시간대·요일)을 심층 분석이 읽는 재료다.
+     */
+    val choice: String? = null,
 )
 
 /** 마지막 수집 시각 등 내부 상태 */

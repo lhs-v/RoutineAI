@@ -208,19 +208,39 @@ object SuggestionOverlay {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(ctx, 10), 0, 0)
         }
-        row.addView(
-            button(ctx, if (shortcut) "열기" else primaryLabel(p), accent, primary = true, weight = 2f) {
-                scope.launch { DecisionContext.log(ctx, p.signature, "accepted", anchorPkg) }
-                if (!shortcut) markAccepted(ctx, p)
-                val r = Applier.apply(ctx, p, anchor = anchorPkg)
-                // 자동 실행이 없어진 뒤로 모드 원복을 걸 곳은 적용 지점뿐이다.
-                if (r.ok && p.category == "app_mode") {
-                    scope.launch { PatternWatcher.onModeApplied(ctx.applicationContext, p) }
-                }
-                dismiss(ctx)
-                if (!r.ok) toast(ctx, r.message)
+
+        fun acceptAndApply(chosen: String?) {
+            scope.launch {
+                DecisionContext.log(ctx, p.signature, "accepted", anchorPkg, choice = chosen)
             }
-        )
+            if (!shortcut) markAccepted(ctx, p)
+            val r = Applier.apply(ctx, p, anchor = anchorPkg, chosen = chosen)
+            // 자동 실행이 없어진 뒤로 모드 원복을 걸 곳은 적용 지점뿐이다.
+            if (r.ok && p.category == "app_mode") {
+                scope.launch { PatternWatcher.onModeApplied(ctx.applicationContext, p) }
+            }
+            dismiss(ctx)
+            if (!r.ok) toast(ctx, r.message)
+        }
+
+        // 선택지 숏컷: launch_app 에 후보가 둘이면 실행 버튼을 두 개로.
+        // "습관은 Music, 가끔은 YouTube" 같은 갈래를 하나로 뭉개지 않는다 —
+        // 어느 쪽을 골랐는지가 기록되어 심층 분석의 정제 재료가 된다.
+        val choices = if (p.actionType == "launch_app") Applier.params(p) else emptyList()
+        if (choices.size >= 2) {
+            row.addView(button(ctx, "${appLabel(ctx, choices[0])} 열기", accent, primary = true, weight = 1.3f) {
+                acceptAndApply(choices[0])
+            })
+            row.addView(button(ctx, appLabel(ctx, choices[1]), accent, primary = false, weight = 1f) {
+                acceptAndApply(choices[1])
+            })
+        } else {
+            row.addView(
+                button(ctx, if (shortcut) "열기" else primaryLabel(p), accent, primary = true, weight = 2f) {
+                    acceptAndApply(null)
+                }
+            )
+        }
         if (!shortcut) {
             row.addView(button(ctx, "나중에", accent, primary = false, weight = 1f) {
                 scope.launch { DecisionContext.log(ctx, p.signature, "not_now", anchorPkg) }
@@ -304,6 +324,11 @@ object SuggestionOverlay {
         "notif_channel_off" -> "알림 정리하기"
         else -> "적용"
     }
+
+    private fun appLabel(ctx: Context, pkg: String): String = runCatching {
+        val pm = ctx.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg.substringAfterLast('.'))
 
     private fun triggerLabel(p: ProposalRow): String = when (p.triggerType) {
         "bt_connect" -> "${p.triggerParam ?: "기기"} 연결됨"

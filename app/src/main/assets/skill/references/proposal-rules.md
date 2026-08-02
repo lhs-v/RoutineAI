@@ -6,7 +6,7 @@
 
 | category | 무엇 | 입장 문턱 | 필요한 서사 |
 |---|---|---|---|
-| `trigger_routine` | 조건 발생 시 앱 실행 | eventChains: 횟수≥3 · 반복≥3일 · 중앙 gap≤60초 | 트리거가 그 앱의 목적을 시작시킨다. 같은 트리거에 여러 앱이면 **조건부 비율(appContext) 기울기가 가장 높은 앱 하나**로 특정 — 횟수 아님 |
+| `trigger_routine` | 조건 발생 시 앱 실행 | eventChains: 횟수≥3 · 반복≥3일 · 중앙 gap≤60초 | 트리거가 그 앱의 목적을 시작시킨다. 같은 트리거에 여러 앱이면 **조건부 비율(appContext) 기울기 순**으로 — 횟수 아님. 1위를 params 첫째로 하고, **2위도 기울기가 뚜렷하면(비율 ≥ 25% 또는 1위의 1/3 이상) params 둘째로 함께** 넣는다 — 팝업이 선택지 두 개로 보여준다. 억지로 채우지 말고, 셋 이상은 넣지 않는다 |
 | `app_pair` | 두 앱을 분할화면 세트로 | appPairs: 왕복≥10 · 중앙 간격≤60초, 또는 coUseCount≥3 | 두 앱의 목적이 하나의 활동으로 이어진다 |
 | `app_mode` | 앱 실행 중에만 기기 설정 변경(종료 시 원복) | apps: 사용일≥관측일 60% 이상인 앱 + 설정이 그 앱 경험을 개선한다는 근거(시간대·수면 창 겹침 등) | 그 앱을 쓰는 동안 이 설정이 나은 이유 |
 | `notif_cleanup` | 시스템성 다량 알림 끄기 | notifByAppInterrupt: ≥20건/일 | 사람이 응답할 일이 없는 알림이다 |
@@ -48,7 +48,8 @@ app_mode 는 행동 로그(회전·밝기 조작)를 수집하지 않으므로 c
 
 ### action.type 허용 목록
 
-`launch_app` (params=[패키지명]) · `app_pair` (params=[패키지1, 패키지2]) ·
+`launch_app` (params=[패키지명] 또는 [1순위, 2순위] — 조건부 비율 순, 선택지로 표시됨) ·
+`app_pair` (params=[패키지1, 패키지2] — 함께 실행되는 세트, 선택지 아님) ·
 `mode_rotation` `mode_eye_comfort` `mode_dnd` (params=[적용 중인 앱 패키지]) ·
 `notif_channel_off` (params=[패키지명])
 

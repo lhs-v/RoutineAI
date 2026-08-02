@@ -1125,7 +1125,10 @@ class MainActivity : ComponentActivity() {
             else -> p.triggerType
         }
         val a = when (p.actionType) {
-            "launch_app" -> "${appLabel(ctx, params.firstOrNull())} 열기"
+            "launch_app" ->
+                if (params.size >= 2)
+                    params.joinToString(" 또는 ") { appLabel(ctx, it) } + " 열기 (선택)"
+                else "${appLabel(ctx, params.firstOrNull())} 열기"
             "app_pair" -> params.joinToString("+") { appLabel(ctx, it) } + " 함께 열기"
             "mode_rotation" -> "화면 회전 잠금"
             "mode_eye_comfort" -> "편안하게 보기"
