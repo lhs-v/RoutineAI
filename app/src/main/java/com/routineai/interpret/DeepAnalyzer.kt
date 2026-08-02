@@ -6,6 +6,7 @@ import com.routineai.data.ProposalEventRow
 import com.routineai.data.ProposalRow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -45,6 +46,30 @@ class DeepAnalyzer(private val ctx: Context) {
         val refinements: List<LlmRefinement> = emptyList(),
         val brief: String = "",
         val analysisNote: String = "",
+        val briefCards: List<LlmBriefCard> = emptyList(),
+    )
+
+    /**
+     * 브리프 카드 — 에이전트가 사용자에게 직접 말을 거는 단위.
+     * type: insight(통찰, [좋아요]) | question(실험 승인 요청, [해볼게요/그대로])
+     *     | report(실험 보고, experimentId 있으면 [좋아요/되돌리기])
+     * 응답은 결정 로그(brief_*)로 환류되어 다음 분석의 입력이 된다.
+     */
+    @Serializable
+    data class LlmBriefCard(
+        val type: String = "insight",
+        val text: String = "",
+        val signature: String? = null,
+        val experimentId: Long? = null,
+        val experiment: LlmExperimentSpec? = null,
+    )
+
+    @Serializable
+    data class LlmExperimentSpec(
+        val conditionHours: String? = null,
+        val conditionWeekdays: String? = null,
+        val days: Int = 14,
+        val hypothesis: String = "",
     )
 
     @Serializable
@@ -116,7 +141,23 @@ class DeepAnalyzer(private val ctx: Context) {
             refined++
         }
 
+        // 브리프 카드 — 검증 통과분만 저장한다. 응답 버튼이 실제 동작(실험
+        // 시작·취소)과 연결되므로 깨진 카드가 화면에 오르면 안 된다.
+        val cards = parsed.briefCards.filter { validCard(it) }.take(4)
+        Settings(ctx).lastBriefCards = encodeCards(cards)
+
         return Result.success(Outcome(refined, skipped, parsed.brief, parsed.analysisNote))
+    }
+
+    private fun validCard(c: LlmBriefCard): Boolean {
+        if (c.text.isBlank() || c.type !in setOf("insight", "question", "report")) return false
+        if (c.type == "question") {
+            val e = c.experiment ?: return false
+            if (c.signature.isNullOrBlank() || e.hypothesis.isBlank()) return false
+            if (e.conditionHours.isNullOrBlank() && e.conditionWeekdays.isNullOrBlank()) return false
+            if (!okSpec(e.conditionHours, 23) || !okSpec(e.conditionWeekdays, 7)) return false
+        }
+        return true
     }
 
     // ------------------------------------------------------------------
@@ -473,6 +514,15 @@ class DeepAnalyzer(private val ctx: Context) {
 
     companion object {
         private val DECISION_KINDS = setOf("accepted", "not_now", "dismissed")
+
+        private val cardsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+        fun encodeCards(cards: List<LlmBriefCard>): String =
+            cardsJson.encodeToString(cards)
+
+        fun decodeCards(s: String): List<LlmBriefCard> =
+            runCatching { cardsJson.decodeFromString<List<LlmBriefCard>>(s) }
+                .getOrDefault(emptyList())
 
         /** 제안당 이력 상한 — 결정과 노출을 따로 센다. 프롬프트 크기와의 타협점. */
         private const val MAX_DECISIONS = 30

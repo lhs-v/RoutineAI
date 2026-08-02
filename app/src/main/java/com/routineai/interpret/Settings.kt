@@ -85,6 +85,14 @@ class Settings(ctx: Context) {
         set(v) = sp.edit().putString("last_refine_note", v).apply()
 
     /**
+     * 에이전트의 브리프 카드(JSON 목록). 통찰·질문·실험 보고가 원탭 응답
+     * 버튼과 함께 실리고, 응답하면 목록에서 빠지며 결정 로그로 환류된다.
+     */
+    var lastBriefCards: String
+        get() = sp.getString("last_brief_cards", "").orEmpty()
+        set(v) = sp.edit().putString("last_brief_cards", v).apply()
+
+    /**
      * 데모 모드.
      *
      * 켜면 리포트를 이 기기의 기록이 아니라 assets 에 넣어둔 데모 로그로 만든다.
@@ -110,6 +118,7 @@ class Settings(ctx: Context) {
         lastBrief = ""
         lastBriefAt = 0L
         lastRefineNote = ""
+        lastBriefCards = ""
     }
 
     fun azureConfig(): AzureConfig =

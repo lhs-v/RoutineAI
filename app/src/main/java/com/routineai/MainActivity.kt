@@ -70,7 +70,9 @@ import androidx.compose.material3.TextButton
 import com.routineai.data.ExperimentRow
 import com.routineai.data.ProposalRow
 import com.routineai.data.RunStat
+import androidx.compose.material3.ButtonDefaults
 import com.routineai.interpret.DeepAnalyzer
+import com.routineai.interpret.Experiments
 import com.routineai.interpret.ProposalEngine
 import com.routineai.watch.Applier
 import com.routineai.watch.SuggestionOverlay
@@ -893,11 +895,35 @@ class MainActivity : ComponentActivity() {
         val accepted = proposals.filter { it.state == "accepted" }
         val accent = Color(prefs.accentColor())
 
+        // 에이전트의 브리프 카드 — 응답하면 목록에서 빠지고 결정 로그로 환류.
+        var cards by remember(refreshTick) {
+            mutableStateOf(DeepAnalyzer.decodeCards(prefs.lastBriefCards))
+        }
+        fun answerCard(card: DeepAnalyzer.LlmBriefCard, kind: String, act: suspend () -> String?) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val msg = runCatching { act() }.getOrElse { "실패: ${it.message}" }
+                com.routineai.watch.DecisionContext.log(
+                    ctx, card.signature.orEmpty(), kind, choice = card.type,
+                )
+                val left = cards.filterNot { it === card }
+                prefs.lastBriefCards = DeepAnalyzer.encodeCards(left)
+                withContext(Dispatchers.Main) {
+                    cards = left
+                    msg?.let {
+                        android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    onChanged()
+                }
+            }
+        }
+
         Column(
             Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             NowBriefCard(prefs, accepted, runs, accent)
+
+            cards.forEach { card -> BriefCardView(card, accent, ::answerCard) }
 
             // ---- 심층 분석 ----
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1016,6 +1042,86 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0x66FFFFFF),
                 )
+            }
+        }
+    }
+
+    /**
+     * 에이전트 카드 한 장 — 통찰/질문/보고 + 원탭 응답.
+     *
+     * 응답 버튼은 실제 동작과 연결된다: [해볼게요]는 카드에 동봉된 스펙으로
+     * 실험을 시작하고, [되돌리기]는 진행 중 실험을 즉시 롤백한다. 어떤
+     * 응답이든 결정 로그(brief_*)로 남아 다음 분석의 입력이 된다.
+     */
+    @Composable
+    private fun BriefCardView(
+        card: DeepAnalyzer.LlmBriefCard,
+        accent: Color,
+        answer: (DeepAnalyzer.LlmBriefCard, String, suspend () -> String?) -> Unit,
+    ) {
+        val ctx = LocalContext.current
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1926)),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(
+                    when (card.type) {
+                        "question" -> "실험 제안"
+                        "report" -> "보고"
+                        else -> "통찰"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                )
+                Text(card.text, style = MaterialTheme.typography.bodySmall, color = Color(0xE6FFFFFF))
+                card.experiment?.let { e ->
+                    Text(
+                        buildString {
+                            append("조건: ")
+                            e.conditionWeekdays?.let { append("요일 $it ") }
+                            e.conditionHours?.let { append("시간 $it ") }
+                            append("· ${e.days}일 뒤 자동 원복")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0x99FFFFFF),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val primaryColors = ButtonDefaults.buttonColors(containerColor = accent)
+                    val outlineColors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xCCFFFFFF))
+                    when (card.type) {
+                        "question" -> {
+                            Button(colors = primaryColors, onClick = {
+                                answer(card, "brief_approve") {
+                                    val e = card.experiment!!
+                                    Experiments.start(
+                                        ctx, card.signature!!, e.conditionHours,
+                                        e.conditionWeekdays, e.days, e.hypothesis,
+                                    )
+                                }
+                            }) { Text("해볼게요") }
+                            OutlinedButton(colors = outlineColors, onClick = {
+                                answer(card, "brief_decline") { null }
+                            }) { Text("그대로 둘게요") }
+                        }
+                        "report" -> {
+                            Button(colors = primaryColors, onClick = {
+                                answer(card, "brief_ack") { null }
+                            }) { Text("좋아요") }
+                            card.experimentId?.let { id ->
+                                OutlinedButton(colors = outlineColors, onClick = {
+                                    answer(card, "brief_revert") {
+                                        Experiments.conclude(ctx, id, "사용자가 되돌림")
+                                    }
+                                }) { Text("되돌리기") }
+                            }
+                        }
+                        else -> Button(colors = primaryColors, onClick = {
+                            answer(card, "brief_ack") { null }
+                        }) { Text("좋아요") }
+                    }
+                }
             }
         }
     }

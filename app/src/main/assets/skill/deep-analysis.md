@@ -65,6 +65,7 @@ history 의 kind:
 | auto_applied | 자동 실행 성공 (과거 이력) |
 | auto_failed | 자동 실행 실패 (과거 이력) |
 | experiment_started / experiment_ended | 조건 실험의 경계 — 이 사이의 반응이 실험 창의 표본이다 |
+| brief_ack / brief_approve / brief_decline / brief_revert | 지난 브리프 카드에 대한 사용자의 원탭 응답 — decline 반복 주제는 다시 묻지 마라 |
 
 맥락 필드 추가분: ringer("sound"/"vibrate"/"silent" — 무음은 회의·수면의
 신호), charging(충전 중 — 자기 전 충전대와 이동 중은 다른 습관), battery
@@ -163,6 +164,35 @@ JSON 하나**로 끝내라 — 도구 호출 없이 텍스트만 낸 턴이 최�
     }
   ],
   "brief": "지금 시점의 브리핑 2~3문장",
-  "analysisNote": "정제 과정 요약 — 무엇을 봤고 무엇은 표본 부족으로 넘겼는지"
+  "analysisNote": "정제 과정 요약 — 무엇을 봤고 무엇은 표본 부족으로 넘겼는지",
+  "briefCards": [
+    {
+      "type": "insight | question | report",
+      "text": "사용자에게 그대로 보일 1~2문장",
+      "signature": "관련 제안 (question 은 필수)",
+      "experimentId": "report 가 실험을 가리킬 때 (되돌리기 버튼이 생긴다)",
+      "experiment": { "conditionHours": "9-16 | null", "conditionWeekdays": "1-5 | null",
+                      "days": 14, "hypothesis": "가설 한 문장" }
+    }
+  ]
 }
 ```
+
+### briefCards 규칙
+
+브리프 카드는 당신이 사용자에게 **직접 말을 거는 유일한 통로**다. 응답
+버튼이 실제 동작과 연결된다:
+
+- `insight` — 관찰·통찰. [좋아요] 버튼만 붙는다.
+- `question` — **실험 승인 요청**. signature 와 experiment 스펙 필수.
+  [해볼게요]를 누르면 그 스펙으로 실험이 시작되고, [그대로 둘게요]는
+  거절로 기록된다. **표본이 3~5건이라 확신이 낮으면 start_experiment 로
+  직접 시작하지 말고 question 으로 물어라.** 표본이 많고 갈림이 또렷하면
+  직접 시작하고 report 로 알려라.
+- `report` — 실험 시작·종료·평가의 보고. experimentId 를 넣으면
+  [되돌리기] 버튼이 생긴다(진행 중 실험을 사용자가 즉시 취소 가능).
+
+최대 3장. 매 분석마다 전부 교체된다 — 지난 카드에 대한 응답은 이력에
+brief_ack(좋아요) / brief_approve(해볼게요) / brief_decline(그대로) /
+brief_revert(되돌리기) kind 로 남아 있다. **brief_decline 이 반복된 주제로
+다시 묻지 마라.**
