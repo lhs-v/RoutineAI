@@ -135,6 +135,34 @@ class DeepAnalyzer(private val ctx: Context) {
                 Settings(ctx).lastReport,
             ).apps.associate { it.pkg to it.secondsPerLaunch }
         }.getOrDefault(emptyMap())
+
+        // 이력에 등장하는 패키지들의 이름·분류 — LLM 이 "이 앱은 무엇을 하러
+        // 여는 앱인가"를 항상 정의하고 시작할 수 있게 한다. 패키지명만으로는
+        // 세계지식이 안 닿는 앱이 있다.
+        val pm = ctx.packageManager
+        val pkgs = buildSet {
+            for (p in proposals) {
+                p.triggerParam?.takeIf { p.triggerType == "app_launch" }?.let { add(it) }
+                runCatching { json.decodeFromString<List<String>>(p.actionParams) }
+                    .getOrDefault(emptyList()).forEach { add(it) }
+            }
+            events.values.flatten().forEach { e ->
+                e.foregroundPkg?.let { add(it) }
+                e.choice?.let { add(it) }
+            }
+        }
+        val appInfo = buildJsonObject {
+            for (pk in pkgs) {
+                val labelStr = runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pk, 0)).toString()
+                }.getOrNull() ?: continue
+                put(pk, buildJsonObject {
+                    put("label", labelStr)
+                    com.routineai.analysis.appCategory(pm, pk)?.let { put("category", it) }
+                })
+            }
+        }
+
         val input = buildJsonObject {
             put("now", buildJsonObject {
                 put("hour", t.hour)
@@ -203,33 +231,6 @@ class DeepAnalyzer(private val ctx: Context) {
                     })
                 })
             })
-        }
-
-        // 이력에 등장하는 패키지들의 이름·분류 — LLM 이 "이 앱은 무엇을 하러
-        // 여는 앱인가"를 항상 정의하고 시작할 수 있게 한다. 패키지명만으로는
-        // 세계지식이 안 닿는 앱이 있다.
-        val pm = ctx.packageManager
-        val pkgs = buildSet {
-            for (p in proposals) {
-                p.triggerParam?.takeIf { p.triggerType == "app_launch" }?.let { add(it) }
-                runCatching { json.decodeFromString<List<String>>(p.actionParams) }
-                    .getOrDefault(emptyList()).forEach { add(it) }
-            }
-            events.values.flatten().forEach { e ->
-                e.foregroundPkg?.let { add(it) }
-                e.choice?.let { add(it) }
-            }
-        }
-        val appInfo = buildJsonObject {
-            for (pk in pkgs) {
-                val labelStr = runCatching {
-                    pm.getApplicationLabel(pm.getApplicationInfo(pk, 0)).toString()
-                }.getOrNull() ?: continue
-                put(pk, buildJsonObject {
-                    put("label", labelStr)
-                    com.routineai.analysis.appCategory(pm, pk)?.let { put("category", it) }
-                })
-            }
         }
 
         return buildString {
