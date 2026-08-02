@@ -54,27 +54,36 @@ class PatternAccessibilityService : AccessibilityService() {
 
         // 1) 앵커 카드의 "고급 옵션" 버튼. content-desc 가 "고급 옵션, <앱>, 버튼"
         //    형태라 앱 이름으로 어느 카드인지 특정한다.
-        val opts = await { root ->
-            find(root) { n ->
-                val d = n.contentDescription?.toString().orEmpty()
-                d.startsWith(ADV_OPTIONS) && d.contains(anchorLabel)
-            } ?: find(root) { n ->
-                n.contentDescription?.toString().orEmpty().startsWith(ADV_OPTIONS)
+        val opts = await { roots ->
+            roots.firstNotNullOfOrNull { r ->
+                find(r) { n ->
+                    val d = n.contentDescription?.toString().orEmpty()
+                    d.startsWith(ADV_OPTIONS) && d.contains(anchorLabel)
+                }
+            } ?: roots.firstNotNullOfOrNull { r ->
+                find(r) { n ->
+                    n.contentDescription?.toString().orEmpty().startsWith(ADV_OPTIONS)
+                }
             }
         } ?: return false.also { Log.w(TAG, "고급 옵션 버튼 없음") }
         if (!click(opts)) return false
 
         // 2) "분할 화면으로 열기"
-        val split = await { root -> find(root) { it.text?.toString() == SPLIT_MENU } }
-            ?: return false.also { Log.w(TAG, "분할 메뉴 없음") }
+        val split = await { roots ->
+            roots.firstNotNullOfOrNull { r -> find(r) { it.text?.toString() == SPLIT_MENU } }
+        } ?: return false.also { Log.w(TAG, "분할 메뉴 없음") }
         if (!click(split)) return false
 
-        // 3) 앱 선택에서 상대 앱. 목록에 없으면 한 번 스크롤해 본다 —
-        //    오래 안 쓴 앱은 첫 화면에 없다.
-        var target = await { root -> findVisible(root, otherLabel) }
+        // 3) 앱 선택에서 상대 앱.
+        //
+        // 반드시 **앱 선택 창 안에서만** 찾아야 한다. 홈 화면과 태스크바에도
+        // 같은 앱 아이콘이 있어서, 활성 창만 보면 뒤에 깔린 홈 화면의 아이콘을
+        // 눌러 아무 일도 일어나지 않는다(실측: 실제 토스는 y817 인데 y2019 를
+        // 눌렀다). 목록에 없으면 한 번 스크롤해 본다.
+        var target = await { roots -> pickerRoot(roots)?.let { findVisible(it, otherLabel) } }
         if (target == null) {
             scrollOnce()
-            target = await { root -> findVisible(root, otherLabel) }
+            target = await { roots -> pickerRoot(roots)?.let { findVisible(it, otherLabel) } }
         }
         if (target == null) {
             Log.w(TAG, "앱 선택에서 $otherLabel 못 찾음")
@@ -92,13 +101,27 @@ class PatternAccessibilityService : AccessibilityService() {
         for (rect in tapTargets(target)) {
             Log.i(TAG, "탭: ${rect.centerX()},${rect.centerY()} (${rect.width()}x${rect.height()})")
             if (!tapAt(rect)) continue
-            val gone = await(2_500L) { root ->
-                if (find(root) { it.text?.toString() == PICKER_TITLE } == null) true else null
+            val gone = await(2_500L) { roots ->
+                if (pickerRoot(roots) == null) true else null
             } ?: false
             if (gone) return true
         }
         Log.w(TAG, "탭했지만 앱 선택 화면이 그대로다")
         return false
+    }
+
+    /** 앱 선택 창의 루트. 홈 화면·태스크바와 구별하는 유일한 표식이 제목이다. */
+    private fun pickerRoot(roots: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? =
+        roots.firstOrNull { find(it) { n -> n.text?.toString() == PICKER_TITLE } != null }
+
+    /** 접근성이 볼 수 있는 모든 창의 루트. 활성 창 하나만으로는 부족하다. */
+    private fun roots(): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        runCatching { windows }.getOrNull()?.forEach { w ->
+            runCatching { w.root }.getOrNull()?.let { out += it }
+        }
+        rootInActiveWindow?.let { out += it }
+        return out
     }
 
     /**
@@ -121,9 +144,15 @@ class PatternAccessibilityService : AccessibilityService() {
         return out.filter { it.width() > 0 && it.height() > 0 }.distinct()
     }
 
-    /** 화면에 실제로 보이는 것 중에서 찾는다 — 접힌 목록의 노드를 눌러도 소용없다. */
+    /**
+     * 화면에 실제로 보이는 것 중에서 찾는다 — 접힌 목록의 노드를 눌러도 소용없다.
+     * 앱 아이콘은 눌리는 컨테이너에 content-desc 로, 그 안 글자에 text 로 이름이
+     * 붙어 있어(실측) 둘 다 본다.
+     */
     private fun findVisible(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? =
         find(root) { n ->
+            (n.contentDescription?.toString() == label && n.isClickable) && n.isVisibleToUser
+        } ?: find(root) { n ->
             n.text?.toString() == label && n.isVisibleToUser &&
                 android.graphics.Rect().also { n.getBoundsInScreen(it) }.width() > 0
         }
@@ -143,9 +172,7 @@ class PatternAccessibilityService : AccessibilityService() {
 
     /** 자동화가 실패했을 때 앱 선택 화면에 사용자를 버려두지 않는다. */
     private fun leavePickerIfOpen() {
-        val open = rootInActiveWindow?.let {
-            find(it) { n -> n.text?.toString() == PICKER_TITLE } != null
-        } ?: false
+        val open = pickerRoot(roots()) != null
         if (open) {
             performGlobalAction(GLOBAL_ACTION_BACK)
             Thread.sleep(400)
@@ -153,12 +180,14 @@ class PatternAccessibilityService : AccessibilityService() {
     }
 
     /** 조건이 만족될 때까지 짧게 다시 본다. 화면이 바뀌는 데 시간이 걸린다. */
-    private fun <T> await(timeoutMs: Long = 2_500L, block: (AccessibilityNodeInfo) -> T?): T? {
+    private fun <T> await(
+        timeoutMs: Long = 2_500L,
+        block: (List<AccessibilityNodeInfo>) -> T?,
+    ): T? {
         val until = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < until) {
-            rootInActiveWindow?.let { root ->
-                block(root)?.let { return it }
-            }
+            val rs = roots()
+            if (rs.isNotEmpty()) block(rs)?.let { return it }
             Thread.sleep(120)
         }
         return null
@@ -176,7 +205,8 @@ class PatternAccessibilityService : AccessibilityService() {
     }
 
     private fun scrollOnce() {
-        rootInActiveWindow?.let { root ->
+        // 앱 선택 창 안에서만 스크롤한다 — 홈 화면을 넘기면 소용없다.
+        pickerRoot(roots())?.let { root ->
             find(root) { it.isScrollable }?.performAction(
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             )
