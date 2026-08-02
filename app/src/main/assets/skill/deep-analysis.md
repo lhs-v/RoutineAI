@@ -53,7 +53,7 @@ history 의 kind:
 | accepted | 수락 — 팝업에서 적용을 누름 (수락된 루틴의 원탭 실행 포함) |
 | not_now | 이번엔 아님 — 제안 자체는 부정하지 않은 거절 |
 | dismissed | 보지 않기 — 제안 자체의 거부 |
-| surfaced | 떴는데 아무 반응 없음 — 무시 |
+| surfaced | 팝업 노출. **모든** 노출에 남는다 — 직후에 결정 이벤트가 따라붙지 않은 surfaced 가 곧 무시다. 노출은 최근 일부만 온다(무시 밀도 참고용) |
 | auto_applied | 자동 실행 성공 |
 | auto_failed | 자동 실행 실패 |
 

@@ -156,8 +156,16 @@ class DeepAnalyzer(private val ctx: Context) {
                     p.conditionWeekdays?.let { put("conditionWeekdays", it) }
                         ?: put("conditionWeekdays", JsonNull)
                     put("history", buildJsonArray {
-                        // 최근 것이 의미가 크다 — 오래된 꼬리는 자른다.
-                        for (e in events[p.signature].orEmpty().takeLast(MAX_HISTORY)) {
+                        // 상한을 결정/노출로 나눈다. 방해 예산이 보류되면서
+                        // 노출(surfaced)이 많아졌는데, 하나의 상한을 같이 쓰면
+                        // 노출이 정작 결정 기록을 밀어낸다 — 조건 정제의 근거는
+                        // 결정이고, 노출은 무시 밀도를 보는 보조 자료다.
+                        val all = events[p.signature].orEmpty()
+                        val decisions = all.filter { it.kind in DECISION_KINDS }
+                            .takeLast(MAX_DECISIONS)
+                        val exposures = all.filter { it.kind !in DECISION_KINDS }
+                            .takeLast(MAX_EXPOSURES)
+                        for (e in (decisions + exposures).sortedBy { it.ts }) {
                             add(buildJsonObject {
                                 put("kind", e.kind)
                                 put("hour", e.hour)
@@ -186,7 +194,8 @@ class DeepAnalyzer(private val ctx: Context) {
     companion object {
         private val DECISION_KINDS = setOf("accepted", "not_now", "dismissed")
 
-        /** 제안당 이력 상한. 프롬프트 크기와 정보량의 타협점. */
-        private const val MAX_HISTORY = 40
+        /** 제안당 이력 상한 — 결정과 노출을 따로 센다. 프롬프트 크기와의 타협점. */
+        private const val MAX_DECISIONS = 30
+        private const val MAX_EXPOSURES = 15
     }
 }

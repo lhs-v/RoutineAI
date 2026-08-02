@@ -19,15 +19,17 @@ import kotlinx.serialization.json.Json
  *
  * 제안의 수명주기가 여기서 갈린다:
  *  - candidate  → 패턴이 감지되면 **팝업으로 제안**한다 (사용자 결정 대기)
- *  - accepted   → 같은 팝업으로 매번 여쭤본다. 방해 예산만 면제 — 이미 원한다고
- *                 확인된 것의 이행이기 때문이다. **자동 실행은 없다**(사용자
+ *  - accepted   → 같은 팝업으로 매번 여쭤본다. **자동 실행은 없다**(사용자
  *                 결정으로 보류): 모든 실행은 사용자의 탭이다.
  *  - snoozed    → '이번엔 아님' 기록. 지금은 candidate 와 같게 다시 제안된다
  *  - dismissed  → 영원히 무시
  *
- * 맥락 버킷 거절 학습(같은 버킷에서 2회 거절 시 침묵)도 보류 상태다 — 기록은
- * 그대로 남으므로 심층 분석의 입력은 유지되고, [rejectedHereBefore] 의 주석
- * 한 줄을 되살리면 다시 켜진다.
+ * 억제 장치 중 둘은 보류 상태다(사용자 결정) — 기록은 전부 남으므로 심층
+ * 분석의 입력은 유지되고, 코드 몇 줄을 되살리면 다시 켜진다:
+ *  - 맥락 버킷 거절 학습(같은 버킷 2회 거절 시 침묵) → [rejectedHereBefore]
+ *  - 방해 예산(24시간 서로 다른 후보 3개·카테고리 1개) → [canSurface]
+ * 지금 남은 억제는 신호 관문(5초)·재노출 간격(20초)·팝업 자동 소멸(12초)·
+ * '보지 않기'뿐이다.
  *
  * 앱 맥락 모드(app_mode)는 진입/이탈이 쌍이라 따로 다룬다 — 들어갈 때 설정을
  * 바꾸고 나올 때 되돌린다. 되돌리지 않으면 사용자의 기기 설정을 몰래 바꿔놓은
@@ -44,8 +46,9 @@ object PatternWatcher {
      */
     const val REPEAT_GAP_MS = 20L * 1000
 
-    /** 하루 방해 예산. 좋은 제안이라도 이만큼 넘으면 제안 탭에 조용히 쌓인다. */
+    /** (보류 중) 하루 방해 예산 — 24시간 안에 서로 다른 후보 이만큼만 */
     const val DAILY_BUDGET = 3
+    @Suppress("unused")
     private const val PER_CATEGORY_BUDGET = 1
 
     /** (보류 중) 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
@@ -147,10 +150,10 @@ object PatternWatcher {
         if (matched.isEmpty()) return
 
         // 1) 수락된 루틴 — 실행은 언제나 사용자의 탭이다. 후보와 같은 팝업으로
-        //    매번 여쭤보고, 방해 예산만 면제한다. P3 가 좁힌 조건 밖에서는 침묵.
+        //    매번 여쭤본다. P3 가 좁힌 조건 밖에서는 침묵.
         for (p in matched.filter { it.state == "accepted" }) {
             if (!inCondition(p, here)) continue
-            if (canSurface(ctx, p, now)) {
+            if (canSurface(p, now)) {
                 surface(ctx, p, now, shortcut = false)
                 return
             }
@@ -158,7 +161,7 @@ object PatternWatcher {
 
         // 2) 후보 — 본 적 없는 맥락에서만 물어본다.
         for (p in matched.filter { it.state !in setOf("accepted", "dismissed") }) {
-            if (!canSurface(ctx, p, now)) continue
+            if (!canSurface(p, now)) continue
             if (rejectedHereBefore(dao, p, hereBucket)) continue
             surface(ctx, p, now, shortcut = false)
             return   // 한 번에 하나만 띄운다
@@ -195,28 +198,14 @@ object PatternWatcher {
     }
 
     /**
-     * 방해 예산 + 연타 방지.
-     *
-     * 수락된 루틴은 예산에서 뺀다 — 사용자가 이미 "이렇게 해달라"고 한 것이라
-     * 방해가 아니라 요청 이행이다. 여기에 예산을 매기면 정작 원하는 순간에
-     * 안 뜬다. 연타 방지(짧은 간격)만 최소로 남긴다.
+     * 연타 방지만 남았다. 방해 예산(24시간 서로 다른 후보 3개·카테고리 1개)은
+     * 보류 중이다(사용자 결정) — 노출 기록(surfaced)은 전부 남으므로 얼마나
+     * 자주 띄웠고 무엇이 무시됐는지는 심층 분석이 이력에서 읽는다.
+     * 되살리려면: lastSurfacedAt 이 24시간 내인 비수락 제안 수를 세어
+     * [DAILY_BUDGET]·[PER_CATEGORY_BUDGET] 과 비교하면 된다.
      */
-    private suspend fun canSurface(ctx: Context, p: ProposalRow, now: Long): Boolean {
-        if (now - (p.lastSurfacedAt ?: 0L) < REPEAT_GAP_MS) return false
-        if (p.state == "accepted") return true
-
-        val dao = Db.get(ctx).dao()
-        val since = now - 24L * 60 * 60 * 1000
-        val today = dao.proposals().filter {
-            it.state != "accepted" && (it.lastSurfacedAt ?: 0L) > since
-        }
-        if (today.size >= DAILY_BUDGET) {
-            Log.i(TAG, "방해 예산 소진 — ${p.oneLine} 은 제안 탭에만 쌓는다")
-            return false
-        }
-        if (today.count { it.category == p.category } >= PER_CATEGORY_BUDGET) return false
-        return true
-    }
+    private fun canSurface(p: ProposalRow, now: Long): Boolean =
+        now - (p.lastSurfacedAt ?: 0L) >= REPEAT_GAP_MS
 
     /** P3 가 조건을 좁혀두었으면 그 조건 밖에서는 뜨지 않는다 */
     private fun inCondition(p: ProposalRow, here: ProposalEventRow): Boolean {

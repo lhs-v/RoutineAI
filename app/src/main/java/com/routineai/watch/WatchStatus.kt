@@ -31,11 +31,6 @@ object WatchStatus {
         val here = DecisionContext.capture(ctx, "", "probe", null, now)
         val bucket = DecisionContext.bucket(here)
 
-        val budgetLeft = (PatternWatcher.DAILY_BUDGET - surfacedToday).coerceAtLeast(0)
-        val byCategory = proposals
-            .filter { (it.lastSurfacedAt ?: 0L) > dayAgo }
-            .groupingBy { it.category }.eachCount()
-
         val lines = ArrayList<Line>()
         // 감지 경로가 살아 있는지가 첫 줄이어야 한다 — 이게 꺼져 있으면
         // 나머지가 다 정상이어도 아무것도 안 뜬다(실제로 그래서 헤맸다).
@@ -47,17 +42,8 @@ object WatchStatus {
             },
             warn = !WatchService.isRunning,
         )
-        lines += Line(
-            "오늘 남은 제안 횟수",
-            "$budgetLeft / ${PatternWatcher.DAILY_BUDGET}",
-            warn = budgetLeft == 0,
-        )
-        if (byCategory.isNotEmpty()) {
-            lines += Line(
-                "오늘 이미 띄운 종류",
-                byCategory.entries.joinToString(", ") { "${it.key} ${it.value}" },
-            )
-        }
+        // 방해 예산은 보류 중 — 제한이 아니라 관찰 지표로만 보여준다.
+        lines += Line("오늘 띄운 팝업", "${surfacedToday}회")
         lines += Line("지금 맥락", bucket)
         lines += Line("연결된 기기", BtState.connectedDevice() ?: "없음")
 
