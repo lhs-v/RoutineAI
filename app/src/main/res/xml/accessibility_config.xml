@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 창 전환 이벤트만 받는다. 화면 내용 읽기(canRetrieveWindowContent)는 켜지 않는다 —
-     필요한 것은 "어떤 앱이 앞에 왔는가"뿐이다. -->
+<!--
+  창 전환 이벤트를 받고, 분할화면을 만들 때만 화면 내용을 읽는다.
+
+  canRetrieveWindowContent 를 켠 이유는 하나뿐이다: 삼성에서 서드파티가
+  분할화면을 만드는 유일한 경로가 최근앱 메뉴("고급 옵션 → 분할 화면으로
+  열기")를 사람 대신 눌러주는 것이기 때문이다(실측으로 다른 경로가 전부
+  막힌 것을 확인). 읽기는 그 자동화가 도는 몇 초 동안 시스템 런처 화면에서만
+  일어나고, 그 밖에는 예전과 같이 이벤트의 패키지명만 본다.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_desc" />

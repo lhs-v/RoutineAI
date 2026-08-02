@@ -210,21 +210,27 @@ object SuggestionOverlay {
         }
 
         fun acceptAndApply(chosen: String?) {
+            if (!shortcut) markAccepted(ctx, p)
+            // 카드는 먼저 걷는다 — 앱페어 자동화는 최근앱 화면을 거치므로
+            // 오버레이가 떠 있으면 그 화면을 가린다.
+            dismiss(ctx)
+            // 적용은 백그라운드에서. 앱페어는 최근앱 메뉴를 눌러가며 수 초가
+            // 걸려, 메인 스레드에서 하면 ANR 이 된다.
             scope.launch {
                 DecisionContext.log(ctx, p.signature, "accepted", anchorPkg, choice = chosen)
+                val r = Applier.apply(ctx, p, anchor = anchorPkg, chosen = chosen)
+                // 자동 실행이 없어진 뒤로 모드 원복을 걸 곳은 적용 지점뿐이다.
+                if (r.ok && p.category == "app_mode") {
+                    PatternWatcher.onModeApplied(ctx.applicationContext, p)
+                }
+                // 실행 결과 측정 — 수락률만으로는 잘못된 발화를 못 본다.
+                if (r.ok && p.actionType == "launch_app") {
+                    PatternWatcher.noteApplied(
+                        p.signature, chosen ?: Applier.params(p).firstOrNull()
+                    )
+                }
+                if (!r.ok) toast(ctx, r.message)
             }
-            if (!shortcut) markAccepted(ctx, p)
-            val r = Applier.apply(ctx, p, anchor = anchorPkg, chosen = chosen)
-            // 자동 실행이 없어진 뒤로 모드 원복을 걸 곳은 적용 지점뿐이다.
-            if (r.ok && p.category == "app_mode") {
-                scope.launch { PatternWatcher.onModeApplied(ctx.applicationContext, p) }
-            }
-            // 실행 결과(유지/이탈) 판정 — 수락률만으로는 잘못된 발화를 못 본다.
-            if (r.ok && p.actionType == "launch_app") {
-                PatternWatcher.noteApplied(p.signature, chosen ?: Applier.params(p).firstOrNull())
-            }
-            dismiss(ctx)
-            if (!r.ok) toast(ctx, r.message)
         }
 
         // 선택지 숏컷: launch_app 에 후보가 둘이면 실행 버튼을 두 개로.

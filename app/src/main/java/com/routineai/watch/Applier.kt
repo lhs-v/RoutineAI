@@ -74,14 +74,16 @@ object Applier {
     /**
      * 분할화면.
      *
-     * FLAG_ACTIVITY_LAUNCH_ADJACENT 만으로는 안 된다 — 그 플래그는 **이미
-     * 멀티윈도우일 때만** 인접 배치가 되고, 단일 화면에서는 그냥 순차 실행이라
-     * 두 번째 앱이 첫 앱을 덮어버린다(실측으로 확인).
+     * 막힌 길을 전부 실측으로 확인했다: FLAG_ACTIVITY_LAUNCH_ADJACENT 는 이미
+     * 멀티윈도우일 때만 인접 배치가 되고, 접근성 전역 토글은 One UI 가
+     * 거부하며, windowingMode 6 은 태스크 모드만 바뀌고 화면은 전체를 덮고,
+     * freeform 은 화면이 깨지고, 레거시 분할 모드(3/4)는 제거됐다.
      *
-     * 단일 화면에서 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
-     * 순서: (앵커 앱을 앞으로) → 분할 토글 → 나머지 앱을 인접으로 실행.
+     * 남은 유일한 길은 사람이 손으로 하는 조작을 접근성이 대신하는 것이다 —
+     * 최근앱 → 고급 옵션 → 분할 화면으로 열기 → 앱 선택.
+     * 실패하면 두 앱을 차례로 열어 최소한 둘 다 손에 닿게 한다.
      *
-     * @param anchor 이미 화면에 떠 있는 쪽. 있으면 다시 띄우지 않는다.
+     * @param anchor 이미 화면에 떠 있는 쪽. 자동화의 기준 카드가 된다.
      */
     private fun appPair(ctx: Context, pkgs: List<String>, anchor: String?): Result {
         if (pkgs.size < 2) return Result(false, "앱 두 개가 필요합니다", real = false)
@@ -89,55 +91,46 @@ object Applier {
         val base = anchor ?: pkgs[0]
         if (intentFor(ctx, other) == null) return Result(false, "$other 를 찾을 수 없습니다", false)
 
-        // 폴더블은 내부(sw875dp)와 커버(sw480dp)의 설정이 다르다. 오버레이는
-        // 애플리케이션 컨텍스트로 도는데 그쪽 설정이 지금 보고 있는 화면과
-        // 어긋날 수 있어, 실제 창 크기에서 폭을 구한다.
         val widthDp = currentWidthDp(ctx)
         val a11y = PatternAccessibilityService.isConnected()
 
         return runCatching {
-            // 기준 앱을 확실히 앞으로 가져온다. 팝업 경로라 이미 떠 있어도
-            // 다시 startActivity 해서 태스크를 안정된 상태로 만든 뒤 토글해야
-            // 접근성이 붙잡을 대상이 흔들리지 않는다(순서 문제 실측).
+            // 기준 앱을 앞으로. 최근앱에서 어느 카드를 열지가 여기서 정해진다.
             intentFor(ctx, base)?.let {
                 ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             Thread.sleep(SPLIT_STEP_MS)
 
-            // 화면을 실제로 가르는 공개 경로는 접근성의 전역 동작뿐이다.
-            // 좁은 화면에서도 force_resizable 이 켜져 있으면 될 수 있으므로
-            // 시도는 하되, 결과를 검증해 실패하면 순차 실행으로 정직하게 떨어진다.
-            val toggled = if (a11y) {
-                PatternAccessibilityService.toggleSplitScreen().also {
-                    if (it) Thread.sleep(SPLIT_STEP_MS * 2)
-                }
+            val split = if (a11y) {
+                PatternAccessibilityService.splitWith(appLabel(ctx, base), appLabel(ctx, other))
             } else false
-            Log.i(TAG, "앱페어: a11y=$a11y widthDp=$widthDp toggled=$toggled")
+            Log.i(TAG, "앱페어: a11y=$a11y widthDp=$widthDp split=$split")
 
-            ctx.startActivity(
-                intentFor(ctx, other)!!.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+            if (!split) {
+                // 자동화가 실패했으면 최소한 두 앱이 다 열려 있게 한다.
+                ctx.startActivity(
+                    intentFor(ctx, other)!!.addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+                    )
                 )
-            )
-            Result(true, splitMessage(toggled, a11y, widthDp), real = true)
+            }
+            Result(true, splitMessage(split, a11y, widthDp), real = true)
         }.getOrElse { Result(false, "앱페어 실행 실패: ${it.message}", real = false) }
     }
 
-    /**
-     * 왜 분할이 안 됐는지를 사용자가 알 수 있게 구분해 알린다.
-     *
-     * 실측: 삼성은 접근성이 붙어 있어도 커버 화면(sw480dp)에서 토글을
-     * 거부했다. 좁은 화면 때문인지 One UI 정책인지 구분이 안 되므로,
-     * 폭이 작으면 펼치기를 먼저 권한다.
-     */
-    private fun splitMessage(toggled: Boolean, a11y: Boolean, widthDp: Int): String = when {
-        toggled -> "두 앱을 분할화면으로 열었습니다"
+    /** 최근앱 메뉴에서 카드를 찾을 때 쓰는 표시 이름 */
+    private fun appLabel(ctx: Context, pkg: String): String = runCatching {
+        val pm = ctx.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
+    /** 왜 분할이 안 됐는지를 사용자가 알 수 있게 구분해 알린다. */
+    private fun splitMessage(split: Boolean, a11y: Boolean, widthDp: Int): String = when {
+        split -> "두 앱을 분할화면으로 열었습니다"
         !a11y -> "두 앱을 열었습니다. 분할화면으로 나누려면 설정에서 접근성을 켜주세요"
         widthDp < MIN_SPLIT_DP ->
             "두 앱을 열었습니다. 좁은 화면에서는 분할이 막힙니다 — 펼친 뒤 다시 시도해 보세요"
-        else -> "두 앱을 열었습니다. 이 기기가 분할화면 전환을 막고 있습니다"
+        else -> "두 앱을 열었습니다. 분할화면 자동 전환에 실패했습니다"
     }
 
     private fun launch(ctx: Context, pkg: String?): Result {

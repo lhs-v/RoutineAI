@@ -690,16 +690,19 @@ class MainActivity : ComponentActivity() {
                         // 이후 같은 트리거가 오면 PatternWatcher 가 말없이 실행한다.
                         primary = "수락하고 지금 적용" to {
                             decide(p, "accepted", "accepted")
-                            val r = Applier.apply(ctx, p)
-                            if (r.ok && p.category == "app_mode") {
-                                // 모드 원복은 적용 지점이 직접 걸어야 한다.
-                                lifecycleScope.launch(Dispatchers.IO) {
+                            // 앱페어는 최근앱 메뉴를 눌러가며 수 초가 걸린다 —
+                            // 메인 스레드에서 하면 ANR 이다.
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                val r = Applier.apply(ctx, p)
+                                if (r.ok && p.category == "app_mode") {
                                     com.routineai.watch.PatternWatcher.onModeApplied(ctx, p)
                                 }
+                                withContext(Dispatchers.Main) {
+                                    android.widget.Toast.makeText(
+                                        ctx, r.message, android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
-                            android.widget.Toast.makeText(
-                                ctx, r.message, android.widget.Toast.LENGTH_SHORT
-                            ).show()
                         },
                         secondary = "보지 않기" to { decide(p, "dismissed", "dismissed") })
                 }
