@@ -29,11 +29,19 @@ class HealthCollector(private val ctx: Context) {
 
     /** @return 이번에 읽은 세션 수. 권한·모듈이 없으면 0 */
     suspend fun collect(from: Long, to: Long): Int {
-        if (!isAvailable(ctx)) return 0
+        if (!isAvailable(ctx)) {
+            Log.i(TAG, "Health Connect 모듈 없음 — 건너뜀")
+            return 0
+        }
         val client = HealthConnectClient.getOrCreate(ctx)
         val granted = runCatching {
             client.permissionController.getGrantedPermissions()
         }.getOrDefault(emptySet())
+        // 0건일 때 "권한이 없어 못 읽었다"와 "권한은 있는데 저장소가 비었다"는
+        // 원인이 완전히 다르다 — 전자는 이 앱 설정, 후자는 삼성 헬스의 동기화.
+        Log.i(TAG, "HC 권한 ${granted.size}개: 운동=" +
+            (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) +
+            " 수면=" + (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted))
 
         val rows = ArrayList<HealthSessionRow>()
         val filter = TimeRangeFilter.between(
@@ -86,8 +94,14 @@ class HealthCollector(private val ctx: Context) {
             }.onFailure { Log.w(TAG, "수면 세션 읽기 실패", it) }
         }
 
+        Log.i(TAG, "HC 읽음: ${rows.size}건 (${fmtWindow(from, to)})")
         if (rows.isNotEmpty()) dao.insertHealth(rows)
         return rows.size
+    }
+
+    private fun fmtWindow(from: Long, to: Long): String {
+        val f = java.text.SimpleDateFormat("MM/dd", java.util.Locale.KOREAN)
+        return "${f.format(java.util.Date(from))}~${f.format(java.util.Date(to))}"
     }
 
     private fun exerciseName(type: Int): String = when (type) {
