@@ -4,12 +4,20 @@ import android.content.Context
 import com.routineai.data.Db
 import com.routineai.data.ProposalEventRow
 import com.routineai.data.ProposalRow
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.ZoneId
@@ -72,9 +80,10 @@ class DeepAnalyzer(private val ctx: Context) {
             return Result.failure(IllegalStateException("아직 수락·거절 이력이 없습니다"))
         }
 
-        onStep("조건 정제 요청 중 (최대 2분)")
+        onStep("조건 정제 요청 중 (도구 사용, 최대 3분)")
         val user = userPrompt(withHistory, events)
-        val raw = Interpreter(ctx).refine(user, cfg).getOrElse { return Result.failure(it) }
+        val raw = Interpreter(ctx).refine(user, cfg, toolSpecs(), ::executeTool)
+            .getOrElse { return Result.failure(it) }
 
         val parsed = runCatching { json.decodeFromString(LlmOutput.serializer(), raw) }
             .getOrElse { return Result.failure(IllegalStateException("정제 JSON 파싱 실패: ${it.message}")) }
@@ -216,6 +225,8 @@ class DeepAnalyzer(private val ctx: Context) {
                         for (e in (decisions + exposures).sortedBy { it.ts }) {
                             add(buildJsonObject {
                                 put("kind", e.kind)
+                                // 도구(get_moment_context)로 이 순간을 파볼 수 있게
+                                put("ts", e.ts)
                                 put("hour", e.hour)
                                 put("weekday", e.weekday)
                                 e.foregroundPkg?.let { put("foreground", it) }
@@ -241,6 +252,135 @@ class DeepAnalyzer(private val ctx: Context) {
             appendLine("```json")
             appendLine(input.toString())
             appendLine("```")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 도구 — 요약 입력으로 부족할 때 에이전트가 골라 파보는 조회 창구.
+    // 전부 읽기 전용이다. 변경 도구(실험·조건)는 다음 단계에서 만료·롤백과
+    // 함께 들어온다 — 만료 없는 변경 권한은 "몰래 바꾸는 앱"으로 가는 문이다.
+
+    private fun toolSpecs(): JsonArray = buildJsonArray {
+        fun tool(name: String, desc: String, props: JsonObject, required: List<String> = emptyList()) =
+            add(buildJsonObject {
+                put("type", "function")
+                put("function", buildJsonObject {
+                    put("name", name)
+                    put("description", desc)
+                    put("parameters", buildJsonObject {
+                        put("type", "object")
+                        put("properties", props)
+                        if (required.isNotEmpty()) {
+                            put("required", buildJsonArray { required.forEach { add(it) } })
+                        }
+                    })
+                })
+            })
+        fun str(desc: String) = buildJsonObject { put("type", "string"); put("description", desc) }
+        fun num(desc: String) = buildJsonObject { put("type", "number"); put("description", desc) }
+
+        tool(
+            "get_report_section",
+            "마지막 통계 리포트의 한 섹션(JSON)을 본다. 앱의 평소 사용 형태·연쇄·" +
+                "시간 고정성이 필요할 때. 예: apps, eventChains, appContext, nightHabit, " +
+                "appPairs, timeFixed, sleep, notifByAppInterrupt",
+            buildJsonObject { put("section", str("섹션 이름")) },
+            listOf("section"),
+        )
+        tool(
+            "get_full_history",
+            "한 제안의 전체 이벤트 이력 — 요약에서 상한에 잘린 것까지 전부",
+            buildJsonObject { put("signature", str("제안의 signature")) },
+            listOf("signature"),
+        )
+        tool(
+            "get_moment_context",
+            "특정 순간 전후의 원본 로그(앱 전환·알림·BT). 결정·무시 순간에 " +
+                "\"대체 무슨 일이 있었나\"를 볼 때. history 항목의 ts 를 넣어라",
+            buildJsonObject {
+                put("ts", num("기준 시각 epoch ms"))
+                put("minutes", num("전후 몇 분 (기본 5, 최대 30)"))
+            },
+            listOf("ts"),
+        )
+        tool(
+            "get_analysis_note",
+            "1차 분석이 버린 후보(rejected)와 분석 노트 — 왜 제안이 안 됐는지",
+            buildJsonObject {},
+        )
+    }
+
+    private fun executeTool(name: String, args: JsonObject): String = runBlocking {
+        when (name) {
+            "get_report_section" -> {
+                val sec = args["section"]?.jsonPrimitive?.contentOrNull
+                    ?: return@runBlocking "section 인자가 필요합니다"
+                val rep = runCatching {
+                    Json.parseToJsonElement(Settings(ctx).lastReport).jsonObject
+                }.getOrNull() ?: return@runBlocking "저장된 리포트가 없습니다"
+                rep[sec]?.toString()
+                    ?: "없는 섹션입니다. 가능: ${rep.keys.joinToString(", ")}"
+            }
+
+            "get_full_history" -> {
+                val sig = args["signature"]?.jsonPrimitive?.contentOrNull
+                    ?: return@runBlocking "signature 인자가 필요합니다"
+                val rows = dao.proposalEvents(sig)
+                if (rows.isEmpty()) return@runBlocking "이력 없음"
+                buildJsonArray {
+                    rows.forEach { e ->
+                        add(buildJsonObject {
+                            put("kind", e.kind); put("ts", e.ts)
+                            put("hour", e.hour); put("weekday", e.weekday)
+                            e.foregroundPkg?.let { put("foreground", it) }
+                            e.network?.let { put("network", it) }
+                            e.btDevice?.let { put("bt", it) }
+                            e.choice?.let { put("choice", it) }
+                            e.ringer?.let { put("ringer", it) }
+                            if (e.charging) put("charging", true)
+                            if (e.batteryPct in 0..100) put("battery", e.batteryPct)
+                            if (e.dwellSeconds >= 0) put("dwellSec", e.dwellSeconds)
+                        })
+                    }
+                }.toString()
+            }
+
+            "get_moment_context" -> {
+                val ts = args["ts"]?.jsonPrimitive?.longOrNull
+                    ?: return@runBlocking "ts 인자가 필요합니다"
+                val min = (args["minutes"]?.jsonPrimitive?.intOrNull ?: 5).coerceIn(1, 30)
+                val from = ts - min * 60_000L
+                val to = ts + min * 60_000L
+                buildJsonObject {
+                    put("apps", buildJsonArray {
+                        dao.events(from, to)
+                            .filter { it.type == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED }
+                            .forEach { e ->
+                                add(buildJsonObject { put("t", e.ts - ts); put("pkg", e.pkg) })
+                            }
+                    })
+                    put("notifs", buildJsonArray {
+                        dao.notifs(from, to).forEach { n ->
+                            add(buildJsonObject {
+                                put("t", n.ts - ts); put("pkg", n.pkg)
+                                if (n.interruptive) put("interruptive", true)
+                            })
+                        }
+                    })
+                    put("bt", buildJsonArray {
+                        dao.btEvents(from, to).forEach { b ->
+                            add(buildJsonObject {
+                                put("t", b.ts - ts); put("action", b.action); put("name", b.name)
+                            })
+                        }
+                    })
+                    put("note", "t 는 기준 시각으로부터의 ms 오프셋(음수=이전)")
+                }.toString()
+            }
+
+            "get_analysis_note" -> Settings(ctx).lastAnalysisNote.ifBlank { "분석 노트 없음" }
+
+            else -> "알 수 없는 도구: $name"
         }
     }
 

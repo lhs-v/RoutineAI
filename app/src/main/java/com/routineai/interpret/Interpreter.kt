@@ -2,6 +2,7 @@ package com.routineai.interpret
 
 import android.content.Context
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -83,12 +84,80 @@ class Interpreter(private val ctx: Context) {
         requestJson(cfg, skillPrompt(), userPrompt(reportJson))
 
     /**
-     * 심층 분석(P3)용 — 별도 지침서 하나로 결정 이력을 보내 조건 정제를 받는다.
-     * 1차 분석과 시스템 프롬프트를 섞지 않는다: 두 작업은 입력도 출력 스키마도
-     * 다르고, 섞으면 서로의 규칙이 오염된다.
+     * 심층 분석(P3)용 — 도구를 쥔 멀티턴 에이전트 루프.
+     *
+     * 모델이 tool_calls 를 내면 [execute] 로 로컬 실행해 결과를 돌려주고,
+     * 최종 텍스트(JSON)가 나올 때까지 반복한다. 요약 입력만으로 판단이 서지
+     * 않을 때 모델이 궁금한 것만 골라 파볼 수 있다 — 모든 순간의 전후를
+     * 미리 실어 보낼 수는 없지만, 도구는 그 순간만 조인해 볼 수 있다.
+     *
+     * 배포가 tools 파라미터를 거부하면 도구 없이 한 방 호출로 낙하한다 —
+     * 기능이 죽는 것보다 얕은 분석이 낫다.
      */
-    fun refine(userPromptText: String, cfg: AzureConfig): Result<String> =
-        requestJson(cfg, skillPrompt(DEEP_FILES), userPromptText)
+    fun refine(
+        userPromptText: String,
+        cfg: AzureConfig,
+        tools: JsonArray? = null,
+        execute: ((String, JsonObject) -> String)? = null,
+    ): Result<String> {
+        val missing = cfg.missing
+        if (missing.isNotEmpty()) {
+            return Result.failure(
+                IllegalStateException("${missing.joinToString(", ")}이(가) 비어 있습니다")
+            )
+        }
+        if (tools == null || execute == null) {
+            return requestJson(cfg, skillPrompt(DEEP_FILES), userPromptText)
+        }
+        val system = skillPrompt(DEEP_FILES)
+
+        return runCatching {
+            val history = mutableListOf(
+                buildJsonObject { put("role", "user"); put("content", userPromptText) }
+            )
+            var toolsEnabled = true
+            var turns = 0
+            while (turns++ < MAX_AGENT_TURNS) {
+                val msg = try {
+                    exchange(cfg, system, history, if (toolsEnabled) tools else null)
+                } catch (e: Exception) {
+                    // 배포가 tools 를 모른다 — 도구를 접고 계속한다.
+                    if (toolsEnabled && e.message?.contains("tool", ignoreCase = true) == true) {
+                        android.util.Log.w("Interpreter", "배포가 tools 를 거부 — 도구 없이 낙하: ${e.message?.take(120)}")
+                        toolsEnabled = false
+                        exchange(cfg, system, history, null)
+                    } else throw e
+                }
+
+                val toolCalls = msg["tool_calls"] as? JsonArray
+                if (toolCalls.isNullOrEmpty()) {
+                    val text = msg["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    return@runCatching extractJson(text)
+                        ?: error("응답에서 JSON 을 찾지 못했습니다: ${text.take(300)}")
+                }
+
+                // 모델이 보낸 assistant 메시지를 그대로 이력에 되돌려줘야
+                // tool 결과와 tool_call_id 가 짝을 이룬다.
+                history += msg
+                for (tc in toolCalls) {
+                    val f = tc.jsonObject["function"]!!.jsonObject
+                    val name = f["name"]!!.jsonPrimitive.content
+                    val args = runCatching {
+                        Json.parseToJsonElement(f["arguments"]!!.jsonPrimitive.content).jsonObject
+                    }.getOrDefault(buildJsonObject {})
+                    val result = runCatching { execute(name, args) }
+                        .getOrElse { "도구 실행 실패: ${it.message}" }
+                    android.util.Log.i("Interpreter", "도구 $name($args) → ${result.take(150)}")
+                    history += buildJsonObject {
+                        put("role", "tool")
+                        put("tool_call_id", tc.jsonObject["id"]!!.jsonPrimitive.content)
+                        put("content", result.take(MAX_TOOL_RESULT_CHARS))
+                    }
+                }
+            }
+            error("도구 호출이 ${MAX_AGENT_TURNS}턴을 넘었습니다 — 지침서의 도구 사용 규칙을 확인하세요")
+        }
+    }
 
     /**
      * 전송 + "JSON 만 내놓게 만들기". 첫 응답이 JSON 으로 파싱되지 않으면
@@ -118,9 +187,12 @@ class Interpreter(private val ctx: Context) {
     }
 
     private fun call(cfg: AzureConfig, system: String, user: String): String {
+        val history = listOf(
+            buildJsonObject { put("role", "user"); put("content", user) }
+        )
         var last: Reply? = null
         for ((i, v) in VARIANTS.withIndex()) {
-            val r = send(cfg, system, user, v)
+            val r = send(cfg, system, history, v)
             if (r.ok) return r.textOrThrow()
             last = r
             // 배포가 그 파라미터를 안 받는다고 답한 경우에만 다음 조합을 시도한다.
@@ -128,6 +200,23 @@ class Interpreter(private val ctx: Context) {
             if (i == VARIANTS.lastIndex || r.code != 400 || !r.isParamMismatch) break
         }
         return last!!.textOrThrow()
+    }
+
+    /** 에이전트 루프의 한 왕복 — 성공하면 assistant 메시지 객체를 돌려준다. */
+    private fun exchange(
+        cfg: AzureConfig,
+        system: String,
+        history: List<JsonObject>,
+        tools: JsonArray?,
+    ): JsonObject {
+        var last: Reply? = null
+        for ((i, v) in VARIANTS.withIndex()) {
+            val r = send(cfg, system, history, v, tools)
+            if (r.ok) return r.messageOrThrow()
+            last = r
+            if (i == VARIANTS.lastIndex || r.code != 400 || !r.isParamMismatch) break
+        }
+        return last!!.messageOrThrow()
     }
 
     /** 코드펜스·앞뒤 설명이 섞여도 첫 '{'부터 짝이 맞는 '}'까지를 꺼낸다. */
@@ -180,6 +269,23 @@ class Interpreter(private val ctx: Context) {
         val isParamMismatch: Boolean
             get() = PARAM_MARKERS.any { body.contains(it, ignoreCase = true) }
 
+        /** 에이전트 루프용 — content 가 비어도(tool_calls 만 있어도) 유효하다. */
+        fun messageOrThrow(): JsonObject {
+            val root: JsonObject? = runCatching {
+                Json.parseToJsonElement(body).jsonObject
+            }.getOrNull()
+            if (!ok) {
+                val msg = runCatching {
+                    root!!["error"]!!.jsonObject["message"]!!.jsonPrimitive.content
+                }.getOrNull()
+                error("HTTP $code: ${msg ?: body.take(400).ifBlank { "(본문 없음)" }}")
+            }
+            val obj = root ?: error("응답을 JSON 으로 읽을 수 없습니다: ${body.take(400)}")
+            return runCatching {
+                obj["choices"]!!.jsonArray[0].jsonObject["message"]!!.jsonObject
+            }.getOrNull() ?: error("응답에 choices 가 없습니다: ${body.take(400)}")
+        }
+
         fun textOrThrow(): String {
             val root: JsonObject? = runCatching {
                 Json.parseToJsonElement(body).jsonObject
@@ -226,14 +332,21 @@ class Interpreter(private val ctx: Context) {
         }
     }
 
-    private fun send(cfg: AzureConfig, system: String, user: String, v: Variant): Reply {
+    private fun send(
+        cfg: AzureConfig,
+        system: String,
+        history: List<JsonObject>,
+        v: Variant,
+        tools: JsonArray? = null,
+    ): Reply {
         val payload = buildJsonObject {
             put("messages", buildJsonArray {
                 add(buildJsonObject { put("role", v.systemRole); put("content", system) })
-                add(buildJsonObject { put("role", "user"); put("content", user) })
+                history.forEach { add(it) }
             })
             put(v.tokenKey, MAX_TOKENS)
             v.temperature?.let { put("temperature", it) }
+            tools?.let { put("tools", it) }
         }
 
         val req = Request.Builder()
@@ -272,6 +385,12 @@ class Interpreter(private val ctx: Context) {
     companion object {
         private val JSON_MEDIA = "application/json".toMediaType()
         private const val MAX_TOKENS = 8000
+
+        /** 에이전트 루프 상한 — 이 안에 못 끝내면 지침이 잘못된 것이다. */
+        private const val MAX_AGENT_TURNS = 8
+
+        /** 도구 결과 상한(문자). 원본 로그 조인이 폭주하지 않게. */
+        private const val MAX_TOOL_RESULT_CHARS = 8_000
 
         /** 흔한 조합부터. 앞이 성공하면 뒤는 보내지 않는다. */
         private val VARIANTS = listOf(
