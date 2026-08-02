@@ -61,30 +61,23 @@ object WatchStatus {
         lines += Line("지금 맥락", bucket)
         lines += Line("연결된 기기", BtState.connectedDevice() ?: "없음")
 
-        // 제안별로 왜 대기 중인지
+        // 제안별로 왜 대기 중인지. 버킷 거절 학습은 보류 중이라 표시하지 않는다.
         for (p in proposals.filter { it.state !in setOf("dismissed") }.take(6)) {
-            val gap = if (p.state == "accepted") PatternWatcher.ACCEPTED_MIN_GAP_MS
-            else PatternWatcher.RESURFACE_MS
             val cool = p.lastSurfacedAt?.let { last ->
-                val remain = gap - (now - last)
+                val remain = PatternWatcher.REPEAT_GAP_MS - (now - last)
                 when {
                     remain <= 0 -> null
                     remain < 60_000 -> "${remain / 1000}초 뒤"
                     else -> "${remain / 60_000}분 뒤"
                 }
             }
-            val rejects = dao.decisions(p.signature)
-                .filter { it.kind == "not_now" || it.kind == "dismissed" }
-            val here2 = rejects.count { DecisionContext.bucket(it) == bucket }
             val why = when {
-                p.state == "accepted" && p.autoRun -> "자동 실행"
-                p.state == "accepted" -> "수락됨 · 원탭 제안"
-                here2 >= PatternWatcher.BUCKET_REJECT_LIMIT -> "이 맥락에선 안 뜸 (거절 ${here2}회)"
+                p.state == "accepted" -> "수락됨 · 팝업 제안"
                 cool != null -> "대기 중 · $cool"
                 budgetLeft == 0 -> "예산 소진"
                 else -> "감시 중"
             }
-            lines += Line(shorten(p), why, warn = why.startsWith("이 맥락") || why == "예산 소진")
+            lines += Line(shorten(p), why, warn = why == "예산 소진")
         }
         return Snapshot(lines, bucket)
     }

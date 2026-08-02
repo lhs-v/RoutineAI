@@ -691,6 +691,12 @@ class MainActivity : ComponentActivity() {
                         primary = "수락하고 지금 적용" to {
                             decide(p, "accepted", "accepted")
                             val r = Applier.apply(ctx, p)
+                            if (r.ok && p.category == "app_mode") {
+                                // 모드 원복은 적용 지점이 직접 걸어야 한다.
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    com.routineai.watch.PatternWatcher.onModeApplied(ctx, p)
+                                }
+                            }
                             android.widget.Toast.makeText(
                                 ctx, r.message, android.widget.Toast.LENGTH_SHORT
                             ).show()
@@ -701,16 +707,9 @@ class MainActivity : ComponentActivity() {
             if (accepted.isNotEmpty()) {
                 Section(
                     "수락됨 ${accepted.size}",
-                    "패턴이 감지되면 원탭으로 제안합니다. 자동 실행으로 바꾸면 묻지 않고 실행합니다.",
+                    "패턴이 감지되면 매번 팝업으로 여쭤봅니다 — 실행은 항상 사용자의 선택입니다.",
                 )
-                accepted.forEach { p ->
-                    ProposalCard(p, autoRunToggle = { on ->
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            Db.get(ctx).dao().upsertProposal(p.copy(autoRun = on))
-                            withContext(Dispatchers.Main) { onChanged() }
-                        }
-                    })
-                }
+                accepted.forEach { p -> ProposalCard(p) }
             }
             if (dismissed.isNotEmpty()) {
                 Section("보지 않기로 함 ${dismissed.size}", "다시 제안되지 않습니다.")
@@ -784,7 +783,6 @@ class MainActivity : ComponentActivity() {
         primary: Pair<String, () -> Unit>? = null,
         secondary: Pair<String, () -> Unit>? = null,
         dimmed: Boolean = false,
-        autoRunToggle: ((Boolean) -> Unit)? = null,
     ) {
         val ctx = LocalContext.current
         val evidence = remember(p.evidenceJson) {
@@ -829,11 +827,8 @@ class MainActivity : ComponentActivity() {
                                 moveTaskToBack(true)
                                 lifecycleScope.launch {
                                     kotlinx.coroutines.delay(600)
-                                    SuggestionOverlay.show(
-                                        ctx, p,
-                                        shortcut = p.state == "accepted" && !p.autoRun,
-                                        anchorPkg = null,
-                                    )
+                                    // 수락 여부와 무관하게 같은 팝업 — 실행은 항상 선택.
+                                    SuggestionOverlay.show(ctx, p, shortcut = false, anchorPkg = null)
                                 }
                             }
                         },
@@ -845,21 +840,6 @@ class MainActivity : ComponentActivity() {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                if (autoRunToggle != null) {
-                    var auto by remember(p.signature) { mutableStateOf(p.autoRun) }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("자동 실행", style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                if (auto) "묻지 않고 바로 실행합니다"
-                                else "매번 원탭으로 여쭤봅니다",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(checked = auto, onCheckedChange = { auto = it; autoRunToggle(it) })
-                    }
                 }
                 if (primary != null || secondary != null) {
                     Row {
@@ -958,7 +938,7 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(onClick = onGoProposals) { Text("제안 탭으로") }
             }
             accepted.forEach { p ->
-                HubCard(p, runs[p.signature], accent, onChanged)
+                HubCard(p, runs[p.signature], accent)
             }
 
             // ---- 정제 노트 ----
@@ -1034,10 +1014,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 루틴 허브 카드 한 장 — 트리거·실행 이력·정제 결과·승격 스위치. */
+    /** 루틴 허브 카드 한 장 — 트리거·실행 이력·정제 결과. */
     @Composable
     private fun HubCard(
-        p: ProposalRow, run: RunStat?, accent: Color, onChanged: () -> Unit,
+        p: ProposalRow, run: RunStat?, accent: Color,
     ) {
         val ctx = LocalContext.current
         var exportOpen by remember { mutableStateOf(false) }
@@ -1045,8 +1025,6 @@ class MainActivity : ComponentActivity() {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Chip(CATEGORY_LABELS[p.category] ?: p.category)
-                    Spacer(Modifier.size(6.dp))
-                    if (p.autoRun) Chip("자동", OK)
                     Spacer(Modifier.weight(1f))
                     Text(
                         if (run != null) "실행 ${run.cnt}회 · ${ago(run.lastTs)}" else "아직 실행 전",
@@ -1090,28 +1068,6 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                }
-                if (p.suggestAutoRun && !p.autoRun) {
-                    Notice(WARN, "심층 분석 추천: 거절 없이 수락만 이어져 자동 실행으로 올려도 좋겠습니다.")
-                }
-                var auto by remember(p.signature, p.autoRun) { mutableStateOf(p.autoRun) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("자동 실행", style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            if (auto) "묻지 않고 바로 실행합니다"
-                            else "매번 원탭으로 여쭤봅니다",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = auto, onCheckedChange = { on ->
-                        auto = on
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            Db.get(ctx).dao().upsertProposal(p.copy(autoRun = on))
-                            withContext(Dispatchers.Main) { onChanged() }
-                        }
-                    })
                 }
                 Text(
                     "삼성 루틴으로 보내기",

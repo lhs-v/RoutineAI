@@ -147,6 +147,10 @@ object SuggestionOverlay {
                 scope.launch { DecisionContext.log(ctx, p.signature, "accepted", anchorPkg) }
                 if (!shortcut) markAccepted(ctx, p)
                 val r = Applier.apply(ctx, p, anchor = anchorPkg)
+                // 자동 실행이 없어진 뒤로 모드 원복을 걸 곳은 적용 지점뿐이다.
+                if (r.ok && p.category == "app_mode") {
+                    scope.launch { PatternWatcher.onModeApplied(ctx.applicationContext, p) }
+                }
                 dismiss(ctx)
                 if (!r.ok) toast(ctx, r.message)
             }
@@ -154,10 +158,11 @@ object SuggestionOverlay {
         if (!shortcut) {
             row.addView(button(ctx, "나중에", accent, primary = false, weight = 1f) {
                 scope.launch { DecisionContext.log(ctx, p.signature, "not_now", anchorPkg) }
-                setState(ctx, p, "snoozed")
-                // 거절이 결과를 바꾼다는 걸 그 자리에서 보여준다 — 스팸과의 차이는
-                // 문구가 아니라 "내 반응이 뭔가를 바꿨다"는 체감에서 온다.
-                toast(ctx, "이런 상황에선 덜 여쭤볼게요")
+                // 수락된 루틴의 '나중에'는 강등이 아니다 — 허브에서 조용히
+                // 사라지면 그게 더 놀랍다. 기록만 남긴다.
+                if (p.state != "accepted") setState(ctx, p, "snoozed")
+                // 버킷 거절 학습이 보류 중이라 "덜 여쭤본다"고 하면 거짓말이 된다.
+                toast(ctx, "다음에 다시 여쭤볼게요")
                 dismiss(ctx)
             })
             row.addView(button(ctx, "안 할래요", accent, primary = false, weight = 1f) {

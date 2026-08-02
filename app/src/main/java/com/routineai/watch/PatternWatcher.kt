@@ -19,10 +19,15 @@ import kotlinx.serialization.json.Json
  *
  * 제안의 수명주기가 여기서 갈린다:
  *  - candidate  → 패턴이 감지되면 **팝업으로 제안**한다 (사용자 결정 대기)
- *  - accepted   → 원탭 제안, 자동 실행으로 승격했으면 **말없이 실행**
- *  - snoozed    → '이번엔 아님'. 별도 타이머는 없다 — 실제 억제는 맥락 버킷
- *                 거절([BUCKET_REJECT_LIMIT])과 재노출 간격([RESURFACE_MS])이 한다
+ *  - accepted   → 같은 팝업으로 매번 여쭤본다. 방해 예산만 면제 — 이미 원한다고
+ *                 확인된 것의 이행이기 때문이다. **자동 실행은 없다**(사용자
+ *                 결정으로 보류): 모든 실행은 사용자의 탭이다.
+ *  - snoozed    → '이번엔 아님' 기록. 지금은 candidate 와 같게 다시 제안된다
  *  - dismissed  → 영원히 무시
+ *
+ * 맥락 버킷 거절 학습(같은 버킷에서 2회 거절 시 침묵)도 보류 상태다 — 기록은
+ * 그대로 남으므로 심층 분석의 입력은 유지되고, [rejectedHereBefore] 의 주석
+ * 한 줄을 되살리면 다시 켜진다.
  *
  * 앱 맥락 모드(app_mode)는 진입/이탈이 쌍이라 따로 다룬다 — 들어갈 때 설정을
  * 바꾸고 나올 때 되돌린다. 되돌리지 않으면 사용자의 기기 설정을 몰래 바꿔놓은
@@ -32,21 +37,18 @@ object PatternWatcher {
 
     private const val TAG = "PatternWatcher"
 
-    /** 아직 결정 안 된 후보를 다시 띄우기까지의 최소 간격 */
-    const val RESURFACE_MS = 20L * 60 * 1000
-
     /**
-     * 수락된 루틴의 연타 방지 간격 — 원탭 팝업과 자동 실행에 같이 쓴다.
-     * 짧게 두는 이유는 이게 방해가 아니라 요청 이행이기 때문이다 —
-     * 앱을 나갔다 다시 들어오면 또 필요하다.
+     * 같은 제안을 다시 띄우기까지의 최소 간격 — 후보·수락 공통.
+     * 길게 두면 데모에서 "왜 안 뜨지"가 되고, 진짜 억제는 방해 예산과
+     * 12초 자동 소멸이 맡는다(사용자 결정으로 짧게 통일).
      */
-    const val ACCEPTED_MIN_GAP_MS = 60L * 1000
+    const val REPEAT_GAP_MS = 20L * 1000
 
     /** 하루 방해 예산. 좋은 제안이라도 이만큼 넘으면 제안 탭에 조용히 쌓인다. */
     const val DAILY_BUDGET = 3
     private const val PER_CATEGORY_BUDGET = 1
 
-    /** 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
+    /** (보류 중) 같은 맥락 버킷에서 이만큼 거절하면 그 버킷은 조용해진다 */
     const val BUCKET_REJECT_LIMIT = 2
 
     /**
@@ -56,13 +58,6 @@ object PatternWatcher {
      */
     private const val SIGNAL_DEDUP_MS = 5_000L
     private val recentSignals = HashMap<String, Long>()
-
-    /**
-     * 자동 실행의 시그니처별 마지막 실행 시각. 입구 관문은 "같은 사건의 중복
-     * 보고"만 거르고, 이건 "다른 사건이지만 너무 잦음"을 거른다 — Wi-Fi 가
-     * 공유기 밴드를 오가며 15초마다 다른 별칭으로 연결되는 것을 실측했다.
-     */
-    private val lastAutoRun = HashMap<String, Long>()
 
     /** app_mode 로 바꿔둔 설정. 이탈 시 되돌리기 위해 기억한다. */
     private val activeModes = HashMap<String, ProposalRow>()
@@ -151,26 +146,12 @@ object PatternWatcher {
         val matched = dao.proposals().filter { it.triggerType == triggerType && paramMatches(it) }
         if (matched.isEmpty()) return
 
-        // 1) 이미 수락된 루틴 — 사용자가 자동 실행으로 승격한 것만 말없이 실행한다.
+        // 1) 수락된 루틴 — 실행은 언제나 사용자의 탭이다. 후보와 같은 팝업으로
+        //    매번 여쭤보고, 방해 예산만 면제한다. P3 가 좁힌 조건 밖에서는 침묵.
         for (p in matched.filter { it.state == "accepted" }) {
             if (!inCondition(p, here)) continue
-            if (p.autoRun) {
-                // 원탭 팝업의 연타 방지와 같은 간격을 자동 실행에도 건다.
-                // 이게 없으면 잦은 트리거가 실행 횟수를 부풀리고, 그 수치가
-                // 심층 분석의 승격 판단 근거까지 오염시킨다.
-                if (now - (lastAutoRun[p.signature] ?: 0L) < ACCEPTED_MIN_GAP_MS) continue
-                lastAutoRun[p.signature] = now
-                val r = Applier.apply(ctx, p, anchor = lastForegroundPkg)
-                if (p.category == "app_mode" && r.ok) rememberMode(ctx, p)
-                dao.logProposalEvent(
-                    DecisionContext.capture(
-                        ctx, p.signature,
-                        if (r.ok) "auto_applied" else "auto_failed", lastForegroundPkg, now
-                    )
-                )
-                Log.i(TAG, "자동 실행: ${p.oneLine} → ${r.message}")
-            } else if (canSurface(ctx, p, now)) {
-                surface(ctx, p, now, shortcut = true)
+            if (canSurface(ctx, p, now)) {
+                surface(ctx, p, now, shortcut = false)
                 return
             }
         }
@@ -195,12 +176,11 @@ object PatternWatcher {
     }
 
     /**
-     * 이 맥락 버킷에서 이미 거절한 적이 있는가.
+     * 이 제안을 다시 보이면 안 되는가.
      *
-     * 시간으로 덮지 않는 이유: 22시에 거절했다고 09시에도 안 띄우면, 정작
-     * 사용자가 원했을 상황을 영영 만나지 못한다. 거절은 "이 제안이 싫다"가
-     * 아니라 "이 조건이 너무 넓다"는 신호일 수 있고, 그 구분은 다른 맥락에서
-     * 한 번 더 물어봐야 얻어진다.
+     * '보지 않기'(dismissed)는 명시적 지시라 항상 지킨다. 맥락 버킷 거절
+     * 학습은 보류 중이다(사용자 결정) — 기록은 계속 남으므로 아래 주석을
+     * 되살리면 다시 켜진다.
      */
     private suspend fun rejectedHereBefore(
         dao: com.routineai.data.UsageDao,
@@ -210,7 +190,8 @@ object PatternWatcher {
         val rejects = dao.decisions(p.signature)
             .filter { it.kind == "not_now" || it.kind == "dismissed" }
         if (rejects.any { it.kind == "dismissed" }) return true
-        return rejects.count { DecisionContext.bucket(it) == hereBucket } >= BUCKET_REJECT_LIMIT
+        // return rejects.count { DecisionContext.bucket(it) == hereBucket } >= BUCKET_REJECT_LIMIT
+        return false
     }
 
     /**
@@ -221,10 +202,8 @@ object PatternWatcher {
      * 안 뜬다. 연타 방지(짧은 간격)만 최소로 남긴다.
      */
     private suspend fun canSurface(ctx: Context, p: ProposalRow, now: Long): Boolean {
-        val accepted = p.state == "accepted"
-        val minGap = if (accepted) ACCEPTED_MIN_GAP_MS else RESURFACE_MS
-        if (now - (p.lastSurfacedAt ?: 0L) < minGap) return false
-        if (accepted) return true
+        if (now - (p.lastSurfacedAt ?: 0L) < REPEAT_GAP_MS) return false
+        if (p.state == "accepted") return true
 
         val dao = Db.get(ctx).dao()
         val since = now - 24L * 60 * 60 * 1000
@@ -259,6 +238,13 @@ object PatternWatcher {
         }
         return true
     }
+
+    /**
+     * 팝업·제안 탭의 '적용'이 app_mode 를 실제로 켰을 때 부른다 — 이탈 원복을
+     * 걸어두는 유일한 통로다. 자동 실행이 없어졌으므로 적용 지점이 직접
+     * 알려줘야 한다(이걸 빼먹으면 회전 잠금이 영영 안 풀린다).
+     */
+    suspend fun onModeApplied(ctx: Context, p: ProposalRow) = rememberMode(ctx, p)
 
     private suspend fun rememberMode(ctx: Context, p: ProposalRow) {
         Applier.params(p).firstOrNull()?.let { activeModes[it] = p }
