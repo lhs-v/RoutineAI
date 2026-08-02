@@ -84,15 +84,41 @@ class PatternAccessibilityService : AccessibilityService() {
         // 여기는 ACTION_CLICK 이 통하지 않는다 — 삼성 앱 선택 그리드는 true 를
         // 돌려주고도 아무 일도 하지 않았다(실측: split=true 인데 선택 안 됨).
         // 사람 손가락과 같은 진짜 터치를 보낸다.
-        if (!tapNode(target)) return false
+        //
+        // 어디를 누르냐가 관건이다: 앱 이름 글자만 누르면 터치 영역 밖이라
+        // 아무 일도 안 일어난다(실측). 실제 대상은 아이콘과 이름을 함께 감싼
+        // 항목이므로, 누를 수 있는 조상의 한가운데부터 시도하고 안 되면
+        // 라벨 자신으로 물러난다.
+        for (rect in tapTargets(target)) {
+            Log.i(TAG, "탭: ${rect.centerX()},${rect.centerY()} (${rect.width()}x${rect.height()})")
+            if (!tapAt(rect)) continue
+            val gone = await(2_500L) { root ->
+                if (find(root) { it.text?.toString() == PICKER_TITLE } == null) true else null
+            } ?: false
+            if (gone) return true
+        }
+        Log.w(TAG, "탭했지만 앱 선택 화면이 그대로다")
+        return false
+    }
 
-        // 클릭 결과를 검증한다. "눌렀다"가 아니라 "앱 선택 화면이 사라졌다"가
-        // 성공의 정의다 — 안 그러면 실패를 성공으로 보고하게 된다.
-        val gone = await(3_000L) { root ->
-            if (find(root) { it.text?.toString() == PICKER_TITLE } == null) true else null
-        } ?: false
-        if (!gone) Log.w(TAG, "탭했지만 앱 선택 화면이 그대로다")
-        return gone
+    /**
+     * 누를 후보 좌표들 — 넓은 항목부터 좁은 라벨 순으로.
+     * 앱 목록은 아이콘 + 이름이 한 항목이라 이름만 누르면 빗나간다.
+     */
+    private fun tapTargets(node: AccessibilityNodeInfo): List<android.graphics.Rect> {
+        val out = ArrayList<android.graphics.Rect>()
+        var n: AccessibilityNodeInfo? = node
+        var depth = 0
+        while (n != null && depth++ < 4) {
+            if (n.isClickable) {
+                out += android.graphics.Rect().also { n!!.getBoundsInScreen(it) }
+                break
+            }
+            n = n.parent
+        }
+        // 조상을 못 찾았거나 그것으로도 안 될 때를 대비해 라벨 자신도 후보.
+        out += android.graphics.Rect().also { node.getBoundsInScreen(it) }
+        return out.filter { it.width() > 0 && it.height() > 0 }.distinct()
     }
 
     /** 화면에 실제로 보이는 것 중에서 찾는다 — 접힌 목록의 노드를 눌러도 소용없다. */
@@ -102,19 +128,28 @@ class PatternAccessibilityService : AccessibilityService() {
                 android.graphics.Rect().also { n.getBoundsInScreen(it) }.width() > 0
         }
 
-    /** 노드 한가운데를 실제로 터치한다. */
-    private fun tapNode(node: AccessibilityNodeInfo): Boolean {
-        val r = android.graphics.Rect().also { node.getBoundsInScreen(it) }
-        if (r.width() <= 0 || r.height() <= 0) return false
+    /** 그 자리를 실제로 터치한다. */
+    private fun tapAt(r: android.graphics.Rect): Boolean {
         val path = android.graphics.Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
         val gesture = android.accessibilityservice.GestureDescription.Builder()
             .addStroke(
-                android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)
+                android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 80)
             )
             .build()
         val ok = dispatchGesture(gesture, null, null)
-        Thread.sleep(500)
+        Thread.sleep(400)
         return ok
+    }
+
+    /** 자동화가 실패했을 때 앱 선택 화면에 사용자를 버려두지 않는다. */
+    private fun leavePickerIfOpen() {
+        val open = rootInActiveWindow?.let {
+            find(it) { n -> n.text?.toString() == PICKER_TITLE } != null
+        } ?: false
+        if (open) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            Thread.sleep(400)
+        }
     }
 
     /** 조건이 만족될 때까지 짧게 다시 본다. 화면이 바뀌는 데 시간이 걸린다. */
@@ -211,9 +246,13 @@ class PatternAccessibilityService : AccessibilityService() {
          */
         fun splitWith(anchorLabel: String, otherLabel: String): Boolean {
             val svc = instance ?: return false
-            return runCatching { svc.runSplit(anchorLabel, otherLabel) }
+            val ok = runCatching { svc.runSplit(anchorLabel, otherLabel) }
                 .onFailure { Log.w(TAG, "분할 자동화 실패", it) }
                 .getOrDefault(false)
+            // 실패했으면 앱 선택 화면에 사용자를 버려두지 않는다 — 그 상태에서
+            // 순차 실행을 하면 새 앱이 분할을 덮어써 더 이상해진다(실측).
+            if (!ok) runCatching { svc.leavePickerIfOpen() }
+            return ok
         }
 
         fun isConnected(): Boolean = instance != null
