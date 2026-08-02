@@ -10,19 +10,21 @@ import androidx.room.RoomDatabase
     entities = [UsageEventRow::class, NotifEventRow::class, NetBucketRow::class,
         NetworkChangeRow::class, KvRow::class, BtEventRow::class, HealthSessionRow::class,
         ProposalRow::class, ProposalEventRow::class],
-    version = 6,
+    version = 7,
     exportSchema = true,
     // 테이블·컬럼 추가만 있는 버전 업이라 자동 마이그레이션으로 충분하다.
     // v2: bt_event, health_session / v3: proposal, proposal_event
     // v4: 결정 맥락 컬럼, autoRun, 조건 정제 필드
     // v5: 심층 분석 결과 (insight, suggestAutoRun, refinedAt)
     // v6: 선택지 숏컷의 선택 기록 (proposal_event.choice)
+    // v7: 휘발성 상태 스냅샷 (ringer, charging, batteryPct)
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 3, to = 4),
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6),
+        AutoMigration(from = 6, to = 7),
     ],
 )
 abstract class Db : RoomDatabase() {

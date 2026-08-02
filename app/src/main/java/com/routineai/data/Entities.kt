@@ -210,6 +210,20 @@ data class ProposalEventRow(
      * (시간대·요일)을 심층 분석이 읽는 재료다.
      */
     val choice: String? = null,
+
+    // ---- 휘발성 상태 스냅샷 (나중에 재구성할 수 없는 것들) ----
+    //
+    // 타임라인(전후 앱·알림)은 원본 로그에서 조인할 수 있으므로 저장하지
+    // 않는다. 여기 담는 것은 그 순간에만 잡을 수 있는 기기 상태뿐이다.
+
+    /** "sound" | "vibrate" | "silent" — 회의 중·수면 중의 강한 신호 */
+    val ringer: String? = null,
+    /** 충전 중 여부 — "자기 전 충전대"와 "이동 중"은 다른 습관이다 */
+    @ColumnInfo(defaultValue = "0")
+    val charging: Boolean = false,
+    /** 배터리 잔량 % — 거절의 숨은 이유일 수 있다 */
+    @ColumnInfo(defaultValue = "-1")
+    val batteryPct: Int = -1,
 )
 
 /** 마지막 수집 시각 등 내부 상태 */

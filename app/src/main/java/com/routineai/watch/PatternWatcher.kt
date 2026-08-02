@@ -67,6 +67,70 @@ object PatternWatcher {
 
     private var lastForegroundPkg: String? = null
 
+    // ---- 루틴 중심 로그: 루틴 자체의 삶을 기록한다 ----
+    //
+    // 사용자 중심 로그(앱 사용·결정)만으로는 "이 루틴이 잘 살고 있는가"를
+    // 모른다. 실행이 유지로 이어졌는지, 조건이 기회를 죽이고 있는지,
+    // 무시 뒤에 사용자가 스스로 무엇을 열었는지 — 실험 루프의 측정 기반이다.
+
+    /** 실행 결과 판정 대기 — 적용 후 90초 뒤에 유지/이탈을 본다 */
+    private data class PendingOutcome(val signature: String, val pkg: String, val at: Long)
+    private val pendingOutcomes = ArrayList<PendingOutcome>()
+    private const val OUTCOME_MS = 90_000L
+
+    /** 조건 밖 근접 발화의 시그니처별 마지막 기록 시각 — 기록 자체의 스팸 방지 */
+    private val lastNearMiss = HashMap<String, Long>()
+    private const val NEAR_MISS_GAP_MS = 30L * 60 * 1000
+
+    /** 팝업 무반응 소멸 직후, 사용자가 스스로 여는 첫 앱을 기다린다 */
+    private data class PendingIgnore(val signature: String, val at: Long)
+    @Volatile private var pendingIgnore: PendingIgnore? = null
+    private const val IGNORE_FOLLOW_MS = 60_000L
+
+    private var cachedLauncher: String? = null
+    private fun launcherPkg(ctx: Context): String = cachedLauncher ?: run {
+        val i = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME)
+        val p = ctx.packageManager.resolveActivity(i, 0)?.activityInfo?.packageName.orEmpty()
+        cachedLauncher = p
+        p
+    }
+
+    /** 팝업의 '적용'이 launch_app 을 실제로 실행했을 때 — 결과 판정을 건다. */
+    fun noteApplied(signature: String, launchedPkg: String?) {
+        launchedPkg ?: return
+        synchronized(pendingOutcomes) {
+            pendingOutcomes += PendingOutcome(signature, launchedPkg, System.currentTimeMillis())
+        }
+    }
+
+    /** 팝업이 무반응으로 소멸했을 때 — 직후의 자발적 행동이 제3의 후보 단서다. */
+    fun noteIgnored(signature: String) {
+        pendingIgnore = PendingIgnore(signature, System.currentTimeMillis())
+    }
+
+    /**
+     * 감시 루프가 주기적으로 부른다. 판정 시각이 지난 실행 결과를 확정한다 —
+     * 적용 90초 뒤에도 그 앱에 있으면 유지, 다른 곳이면 이탈. 수락률만으로는
+     * "수락했는데 바로 닫는" 잘못된 발화를 볼 수 없다.
+     */
+    suspend fun evaluateOutcomes(ctx: Context) {
+        val now = System.currentTimeMillis()
+        val due = synchronized(pendingOutcomes) {
+            val d = pendingOutcomes.filter { now - it.at >= OUTCOME_MS }
+            pendingOutcomes.removeAll(d.toSet())
+            d
+        }
+        for (o in due) {
+            val stayed = lastForegroundPkg == o.pkg
+            DecisionContext.log(
+                ctx, o.signature,
+                if (stayed) "outcome_stayed" else "outcome_bounced",
+                lastForegroundPkg,
+            )
+        }
+    }
+
     suspend fun onAppForeground(ctx: Context, pkg: String) {
         // 모드 복구와 앵커 갱신은 멱등이라 관문 앞에서 한다 — 중복 보고가
         // 와도 같은 앱이면 되돌릴 것도, 바뀔 것도 없다.
@@ -76,6 +140,16 @@ object PatternWatcher {
         }
         if (leaving.isNotEmpty()) persistModes(ctx)
         lastForegroundPkg = pkg
+
+        // 무시 직후의 자발적 첫 앱. 런처는 경유지일 뿐이라 건너뛰고 기다린다.
+        pendingIgnore?.let { pi ->
+            if (System.currentTimeMillis() - pi.at > IGNORE_FOLLOW_MS) {
+                pendingIgnore = null
+            } else if (pkg != launcherPkg(ctx) && pkg != ctx.packageName) {
+                pendingIgnore = null
+                DecisionContext.log(ctx, pi.signature, "ignored_then", pkg, choice = pkg)
+            }
+        }
         // 앱페어는 둘 중 아무 쪽을 열어도 성립한다. triggerParam 하나로만
         // 매칭하면 한쪽에서만 뜨는데, 실제로 그래서 토스에서는 안 떴다.
         signal(ctx, "app_launch", pkg) {
@@ -150,9 +224,19 @@ object PatternWatcher {
         if (matched.isEmpty()) return
 
         // 1) 수락된 루틴 — 실행은 언제나 사용자의 탭이다. 후보와 같은 팝업으로
-        //    매번 여쭤본다. P3 가 좁힌 조건 밖에서는 침묵.
+        //    매번 여쭤본다. P3 가 좁힌 조건 밖에서는 침묵하되, 침묵을 기록한다.
         for (p in matched.filter { it.state == "accepted" }) {
-            if (!inCondition(p, here)) continue
+            if (!inCondition(p, here)) {
+                // 조건 밖 근접 발화 — "조건이 너무 좁은가"를 판단할 유일한
+                // 재료다. 좁힌 조건이 기회를 죽여도 이 기록 없이는 아무도 모른다.
+                if (now - (lastNearMiss[p.signature] ?: 0L) >= NEAR_MISS_GAP_MS) {
+                    lastNearMiss[p.signature] = now
+                    dao.logProposalEvent(
+                        DecisionContext.capture(ctx, p.signature, "near_miss", lastForegroundPkg, now)
+                    )
+                }
+                continue
+            }
             if (canSurface(p, now)) {
                 surface(ctx, p, now, shortcut = false)
                 return

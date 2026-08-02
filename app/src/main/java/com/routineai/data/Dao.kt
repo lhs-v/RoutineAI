@@ -107,13 +107,15 @@ interface UsageDao {
     suspend fun decisions(sig: String): List<ProposalEventRow>
 
     /**
-     * 심층 분석의 입력 — 결정과 실행의 전체 궤적.
-     * surfaced 를 포함하는 이유: "떴는데 아무 반응 없음"도 신호다
-     * (수락도 거절도 아닌 무시는 조건이 애매하게 넓다는 뜻일 수 있다).
+     * 심층 분석의 입력 — 결정·실행·루틴 자체의 삶 전체 궤적.
+     * surfaced(노출)·outcome_*(실행 후 유지/이탈)·near_miss(조건 밖 근접
+     * 발화)·ignored_then(무시 직후 자발 행동)이 결정과 함께 있어야
+     * "조건이 맞는가"를 양방향으로 판단할 수 있다.
      */
     @Query(
         "SELECT * FROM proposal_event WHERE kind IN " +
-            "('accepted','not_now','dismissed','auto_applied','auto_failed','surfaced') " +
+            "('accepted','not_now','dismissed','auto_applied','auto_failed','surfaced'," +
+            "'outcome_stayed','outcome_bounced','near_miss','ignored_then') " +
             "ORDER BY ts ASC"
     )
     suspend fun allDecisionEvents(): List<ProposalEventRow>

@@ -219,6 +219,10 @@ object SuggestionOverlay {
             if (r.ok && p.category == "app_mode") {
                 scope.launch { PatternWatcher.onModeApplied(ctx.applicationContext, p) }
             }
+            // 실행 결과(유지/이탈) 판정 — 수락률만으로는 잘못된 발화를 못 본다.
+            if (r.ok && p.actionType == "launch_app") {
+                PatternWatcher.noteApplied(p.signature, chosen ?: Applier.params(p).firstOrNull())
+            }
             dismiss(ctx)
             if (!r.ok) toast(ctx, r.message)
         }
@@ -301,7 +305,14 @@ object SuggestionOverlay {
                     )
                 }
                 .start()
-            main.postDelayed({ dismiss(ctx) }, AUTO_HIDE_MS)
+            main.postDelayed({
+                // 아직 붙어 있으면 무반응 소멸이다 — 직후에 사용자가 스스로
+                // 여는 첫 앱이 "정말 원했던 것"의 단서가 된다.
+                if (card === root) {
+                    if (p.actionType == "launch_app") PatternWatcher.noteIgnored(p.signature)
+                    dismiss(ctx)
+                }
+            }, AUTO_HIDE_MS)
         }
     }
 

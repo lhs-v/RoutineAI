@@ -66,6 +66,8 @@ class WatchService : Service() {
                 runCatching { pollNetwork() }.onFailure { Log.w(TAG, "네트워크 폴링 실패", it) }
                 runCatching { pollTime() }.onFailure { Log.w(TAG, "시간 트리거 실패", it) }
                 runCatching { pollExercise() }.onFailure { Log.w(TAG, "운동 폴링 실패", it) }
+                runCatching { PatternWatcher.evaluateOutcomes(applicationContext) }
+                    .onFailure { Log.w(TAG, "실행 결과 판정 실패", it) }
                 delay(POLL_MS)
             }
         }

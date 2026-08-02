@@ -174,6 +174,9 @@ class DeepAnalyzer(private val ctx: Context) {
                                 e.network?.let { put("network", it) }
                                 e.btDevice?.let { put("bt", it) }
                                 e.choice?.let { put("choice", it) }
+                                e.ringer?.let { put("ringer", it) }
+                                if (e.charging) put("charging", true)
+                                if (e.batteryPct in 0..100) put("battery", e.batteryPct)
                             })
                         }
                     })

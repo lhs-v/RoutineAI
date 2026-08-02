@@ -29,6 +29,7 @@ object DecisionContext {
         choice: String? = null,
     ): ProposalEventRow {
         val t = Instant.ofEpochMilli(ts).atZone(zone)
+        val (charging, batteryPct) = battery(ctx)
         return ProposalEventRow(
             ts = ts,
             proposalSignature = signature,
@@ -39,7 +40,26 @@ object DecisionContext {
             network = network(ctx),
             btDevice = BtState.connectedDevice(),
             choice = choice,
+            ringer = ringer(ctx),
+            charging = charging,
+            batteryPct = batteryPct,
         )
+    }
+
+    private fun ringer(ctx: Context): String? =
+        when ((ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)?.ringerMode) {
+            android.media.AudioManager.RINGER_MODE_NORMAL -> "sound"
+            android.media.AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+            android.media.AudioManager.RINGER_MODE_SILENT -> "silent"
+            else -> null
+        }
+
+    private fun battery(ctx: Context): Pair<Boolean, Int> {
+        val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            ?: return false to -1
+        return runCatching {
+            bm.isCharging to bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        }.getOrDefault(false to -1)
     }
 
     suspend fun log(
