@@ -115,10 +115,27 @@ interface UsageDao {
     @Query(
         "SELECT * FROM proposal_event WHERE kind IN " +
             "('accepted','not_now','dismissed','auto_applied','auto_failed','surfaced'," +
-            "'outcome','near_miss','ignored_then') " +
+            "'outcome','near_miss','ignored_then','experiment_started','experiment_ended') " +
             "ORDER BY ts ASC"
     )
     suspend fun allDecisionEvents(): List<ProposalEventRow>
+
+    // ---- 조건 실험 ----
+
+    @Insert
+    suspend fun insertExperiment(row: ExperimentRow): Long
+
+    @Query("SELECT * FROM experiment WHERE id = :id")
+    suspend fun experiment(id: Long): ExperimentRow?
+
+    @Query("SELECT * FROM experiment WHERE state = 'running'")
+    suspend fun runningExperiments(): List<ExperimentRow>
+
+    @Query("SELECT * FROM experiment ORDER BY startedAt DESC")
+    suspend fun experiments(): List<ExperimentRow>
+
+    @Query("UPDATE experiment SET state = :state, verdict = :verdict WHERE id = :id")
+    suspend fun concludeExperiment(id: Long, state: String, verdict: String?)
 
     /** 루틴 허브의 "몇 번 실행됐나". 원탭 실행(accepted)과 자동 실행을 합친다. */
     @Query(

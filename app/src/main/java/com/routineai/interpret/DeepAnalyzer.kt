@@ -81,7 +81,7 @@ class DeepAnalyzer(private val ctx: Context) {
         }
 
         onStep("조건 정제 요청 중 (도구 사용, 최대 3분)")
-        val user = userPrompt(withHistory, events)
+        val user = userPrompt(withHistory, events, dao.experiments().take(8))
         val raw = Interpreter(ctx).refine(user, cfg, toolSpecs(), ::executeTool)
             .getOrElse { return Result.failure(it) }
 
@@ -92,9 +92,14 @@ class DeepAnalyzer(private val ctx: Context) {
         val now = System.currentTimeMillis()
         var refined = 0
         var skipped = 0
+        // 진행 중 실험의 조건은 실험이 소유한다 — 영구 정제가 덮어쓰면
+        // 롤백 목적지가 어긋난다. (에이전트가 이번 턴에 conclude 로 마감한
+        // 실험은 running 이 아니므로 확정이 통과한다.)
+        val experimentOwned = dao.runningExperiments().map { it.proposalSignature }.toSet()
         for (r in parsed.refinements) {
             val row = dao.proposal(r.signature)
             if (row == null || row.state == "dismissed" || !valid(r)) { skipped++; continue }
+            if (r.signature in experimentOwned) { skipped++; continue }
             dao.upsertProposal(
                 row.copy(
                     conditionHours = r.conditionHours?.takeIf { it.isNotBlank() },
@@ -134,6 +139,7 @@ class DeepAnalyzer(private val ctx: Context) {
     private fun userPrompt(
         proposals: List<ProposalRow>,
         events: Map<String, List<ProposalEventRow>>,
+        experiments: List<com.routineai.data.ExperimentRow> = emptyList(),
     ): String {
         val t = Instant.now().atZone(ZoneId.systemDefault())
         // outcome 의 dwellSec 을 판단할 잣대 — 그 앱의 평소 1회 체류.
@@ -178,6 +184,21 @@ class DeepAnalyzer(private val ctx: Context) {
                 put("weekday", t.dayOfWeek.value)
             })
             put("apps", appInfo)
+            if (experiments.isNotEmpty()) {
+                put("experiments", buildJsonArray {
+                    experiments.forEach { e ->
+                        add(buildJsonObject {
+                            put("id", e.id)
+                            put("signature", e.proposalSignature)
+                            put("state", e.state)
+                            put("hypothesis", e.hypothesis)
+                            put("startedAt", e.startedAt)
+                            put("endsAt", e.endsAt)
+                            e.verdict?.let { put("verdict", it) }
+                        })
+                    }
+                })
+            }
             put("proposals", buildJsonArray {
                 for (p in proposals) add(buildJsonObject {
                     put("signature", p.signature)
@@ -308,6 +329,35 @@ class DeepAnalyzer(private val ctx: Context) {
             "1차 분석이 버린 후보(rejected)와 분석 노트 — 왜 제안이 안 됐는지",
             buildJsonObject {},
         )
+        tool(
+            "get_experiments",
+            "조건 실험 목록 — 진행 중(running)·만료 롤백됨(ended, 평가 대기)·평가 완료(evaluated)",
+            buildJsonObject {},
+        )
+        tool(
+            "start_experiment",
+            "조건 가설을 기간 한정으로 실제 적용한다. 만료되면 자동 롤백된다. " +
+                "확신이 없는 조건은 refinements 로 확정하지 말고 이것으로 검증하라. " +
+                "제안당 하나, 3~21일. hypothesis 는 사용자에게 그대로 보이는 한 문장",
+            buildJsonObject {
+                put("signature", str("대상 제안의 signature"))
+                put("conditionHours", str("실험 조건 시간, 예 \"9-16\" (선택)"))
+                put("conditionWeekdays", str("실험 조건 요일, 예 \"1-5\" (선택)"))
+                put("days", num("실험 기간 일수 (3~21, 기본 14)"))
+                put("hypothesis", str("사용자에게 보일 가설 한 문장"))
+            },
+            listOf("signature", "hypothesis"),
+        )
+        tool(
+            "conclude_experiment",
+            "끝난 실험의 평가를 기록한다. 진행 중인 것을 넣으면 즉시 롤백 후 마감. " +
+                "성공한 조건의 영구 확정은 refinements 로 따로 내라",
+            buildJsonObject {
+                put("id", num("실험 id"))
+                put("verdict", str("평가 한 문장 — 창 안팎의 수락률·near_miss·dwell 비교 근거"))
+            },
+            listOf("id", "verdict"),
+        )
     }
 
     private fun executeTool(name: String, args: JsonObject): String = runBlocking {
@@ -379,6 +429,43 @@ class DeepAnalyzer(private val ctx: Context) {
             }
 
             "get_analysis_note" -> Settings(ctx).lastAnalysisNote.ifBlank { "분석 노트 없음" }
+
+            "get_experiments" -> {
+                val rows = dao.experiments()
+                if (rows.isEmpty()) "실험 없음"
+                else buildJsonArray {
+                    rows.take(12).forEach { e ->
+                        add(buildJsonObject {
+                            put("id", e.id)
+                            put("signature", e.proposalSignature)
+                            put("state", e.state)
+                            put("hypothesis", e.hypothesis)
+                            e.conditionHours?.let { put("conditionHours", it) }
+                            e.conditionWeekdays?.let { put("conditionWeekdays", it) }
+                            put("startedAt", e.startedAt)
+                            put("endsAt", e.endsAt)
+                            e.verdict?.let { put("verdict", it) }
+                        })
+                    }
+                }.toString()
+            }
+
+            "start_experiment" -> Experiments.start(
+                ctx,
+                signature = args["signature"]?.jsonPrimitive?.contentOrNull
+                    ?: return@runBlocking "signature 인자가 필요합니다",
+                hours = args["conditionHours"]?.jsonPrimitive?.contentOrNull,
+                weekdays = args["conditionWeekdays"]?.jsonPrimitive?.contentOrNull,
+                days = args["days"]?.jsonPrimitive?.intOrNull ?: 14,
+                hypothesis = args["hypothesis"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+
+            "conclude_experiment" -> Experiments.conclude(
+                ctx,
+                id = args["id"]?.jsonPrimitive?.longOrNull
+                    ?: return@runBlocking "id 인자가 필요합니다",
+                verdict = args["verdict"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
 
             else -> "알 수 없는 도구: $name"
         }

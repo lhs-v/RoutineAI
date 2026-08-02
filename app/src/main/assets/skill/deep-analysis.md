@@ -26,6 +26,8 @@ description: 루틴 제안에 대한 사용자의 수락·거절 이력을 읽�
 {
   "now": { "hour": 0-23, "weekday": 1-7 },
   "apps": { "패키지명": { "label": "앱 이름", "category": "개발자 선언 분류 (없을 수 있음)" } },
+  "experiments": [ { "id": 1, "signature": "...", "state": "running|ended|evaluated",
+    "hypothesis": "...", "startedAt": "epoch ms", "endsAt": "epoch ms", "verdict": "평가 (있으면)" } ],
   "proposals": [
     {
       "signature": "고유 키",
@@ -62,6 +64,7 @@ history 의 kind:
 | ignored_then | 무반응 소멸 직후 사용자가 스스로 연 첫 앱(choice) — 제안과 다른 앱이 반복되면 제3의 후보다 |
 | auto_applied | 자동 실행 성공 (과거 이력) |
 | auto_failed | 자동 실행 실패 (과거 이력) |
+| experiment_started / experiment_ended | 조건 실험의 경계 — 이 사이의 반응이 실험 창의 표본이다 |
 
 맥락 필드 추가분: ringer("sound"/"vibrate"/"silent" — 무음은 회의·수면의
 신호), charging(충전 중 — 자기 전 충전대와 이동 중은 다른 습관), battery
@@ -110,6 +113,21 @@ weekday 는 1=월 … 7=일. hour 는 현지 시각 0–23.
   알림·BT). 이해 안 되는 거절·무시 순간에 "그때 무슨 일이 있었나"를 볼 때.
   history 항목의 ts 를 그대로 넣는다.
 - `get_analysis_note()` — 1차 분석이 버린 후보와 사유.
+- `get_experiments()` — 조건 실험 목록과 상태.
+- `start_experiment(signature, conditionHours?, conditionWeekdays?, days, hypothesis)`
+  — 조건 가설을 기간 한정으로 실제 적용. **만료 시 자동 롤백**된다.
+- `conclude_experiment(id, verdict)` — 끝난 실험의 평가 기록.
+
+### 실험 규칙
+
+- **확신이 없는 조건은 refinements 로 확정하지 말고 실험으로 검증하라.**
+  refinements 는 영구, 실험은 만료가 있다 — 되돌릴 수 있는 쪽이 먼저다.
+- 표본 규칙(결정 3건 미만 금지)은 실험 시작에도 똑같이 적용된다.
+- 실험 창의 반응은 이력에 그대로 쌓이고 experiment_started / experiment_ended
+  가 경계다. **창 안팎의 수락률·near_miss·dwell 을 비교**해 평가하라.
+- ended(만료 롤백됨) 실험을 발견하면 평가가 당신의 첫 일이다:
+  conclude_experiment 로 판정을 남기고, 성공이면 refinements 로 영구 확정하라.
+- 진행 중(running) 실험의 제안에는 refinements 를 내지 마라 — 앱이 무시한다.
 
 도구 사용은 2~4회면 충분하다. 다 본 뒤 **최종 답은 반드시 출력 스키마의
 JSON 하나**로 끝내라 — 도구 호출 없이 텍스트만 낸 턴이 최종 답으로 읽힌다.

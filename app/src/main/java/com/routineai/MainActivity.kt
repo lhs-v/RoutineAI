@@ -67,6 +67,7 @@ import androidx.health.connect.client.PermissionController
 import com.routineai.collect.HealthCollector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import com.routineai.data.ExperimentRow
 import com.routineai.data.ProposalRow
 import com.routineai.data.RunStat
 import com.routineai.interpret.DeepAnalyzer
@@ -879,12 +880,14 @@ class MainActivity : ComponentActivity() {
         var proposals by remember { mutableStateOf<List<ProposalRow>>(emptyList()) }
         var runs by remember { mutableStateOf<Map<String, RunStat>>(emptyMap()) }
         var hasHistory by remember { mutableStateOf(false) }
+        var experiments by remember { mutableStateOf<Map<String, ExperimentRow>>(emptyMap()) }
         LaunchedEffect(refreshTick) {
             withContext(Dispatchers.IO) {
                 val dao = Db.get(ctx).dao()
                 proposals = dao.proposals()
                 runs = dao.runStats().associateBy { it.signature }
                 hasHistory = DeepAnalyzer(ctx).hasHistory()
+                experiments = dao.runningExperiments().associateBy { it.proposalSignature }
             }
         }
         val accepted = proposals.filter { it.state == "accepted" }
@@ -941,7 +944,7 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(onClick = onGoProposals) { Text("제안 탭으로") }
             }
             accepted.forEach { p ->
-                HubCard(p, runs[p.signature], accent)
+                HubCard(p, runs[p.signature], experiments[p.signature], accent)
             }
 
             // ---- 정제 노트 ----
@@ -1017,10 +1020,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 루틴 허브 카드 한 장 — 트리거·실행 이력·정제 결과. */
+    /** 루틴 허브 카드 한 장 — 트리거·실행 이력·정제 결과·진행 중 실험. */
     @Composable
     private fun HubCard(
-        p: ProposalRow, run: RunStat?, accent: Color,
+        p: ProposalRow, run: RunStat?, exp: ExperimentRow?, accent: Color,
     ) {
         val ctx = LocalContext.current
         var exportOpen by remember { mutableStateOf(false) }
@@ -1041,6 +1044,12 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // 진행 중 실험 — 앱이 스스로 조건을 시험 중임을 숨기지 않는다.
+                exp?.let {
+                    val dday = ((it.endsAt - System.currentTimeMillis()) / 86_400_000L + 1)
+                        .coerceAtLeast(1)
+                    Notice(accent, "실험 중 D-$dday · ${it.hypothesis} (끝나면 원래대로 돌아갑니다)")
+                }
                 condLabel(p)?.let {
                     Text(
                         "조건: $it",

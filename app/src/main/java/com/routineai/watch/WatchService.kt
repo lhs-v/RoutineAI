@@ -68,6 +68,8 @@ class WatchService : Service() {
                 runCatching { pollExercise() }.onFailure { Log.w(TAG, "운동 폴링 실패", it) }
                 runCatching { PatternWatcher.evaluateOutcomes(applicationContext) }
                     .onFailure { Log.w(TAG, "실행 결과 판정 실패", it) }
+                runCatching { pollExperiments() }
+                    .onFailure { Log.w(TAG, "실험 만료 확인 실패", it) }
                 delay(POLL_MS)
             }
         }
@@ -226,6 +228,17 @@ class WatchService : Service() {
         }
     }
 
+    private var lastExperimentPoll = 0L
+
+    /** 만료된 실험의 조건을 되돌린다. 실험이 없으면 60초에 한 번의 조회뿐이다. */
+    private suspend fun pollExperiments() {
+        val now = System.currentTimeMillis()
+        if (now - lastExperimentPoll < EXPERIMENT_POLL_MS) return
+        lastExperimentPoll = now
+        val n = com.routineai.interpret.Experiments.rollbackExpired(applicationContext)
+        if (n > 0) Log.i(TAG, "실험 만료 롤백: ${n}건")
+    }
+
     /** 지금 연결된 기기 이름들. 본딩 목록에서 실제 연결 여부를 묻는다. */
     private fun connectedDevices(): Set<String> = runCatching {
         val bm = getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
@@ -289,6 +302,9 @@ class WatchService : Service() {
 
         /** Health Connect 조회는 무거워서 별도 주기로 돈다. */
         private const val EXERCISE_POLL_MS = 60_000L
+
+        /** 실험 만료는 분 단위면 충분하다. */
+        private const val EXPERIMENT_POLL_MS = 60_000L
 
         private val IGNORED = setOf(
             "com.android.systemui", "android",

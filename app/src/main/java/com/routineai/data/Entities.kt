@@ -235,6 +235,32 @@ data class ProposalEventRow(
     val dwellSeconds: Int = -1,
 )
 
+/**
+ * 조건 실험 — 에이전트의 유일한 변경 단위.
+ *
+ * 모든 실험은 만료(endsAt)를 갖고, 만료 순간 제안의 조건이 prev* 로 자동
+ * 롤백된다. 만료 없는 변경 권한은 "몰래 바꾸는 앱"으로 가는 문이라 없다.
+ * state: running(적용 중) | ended(만료 롤백됨, 평가 대기) | evaluated(평가 완료)
+ */
+@Entity(tableName = "experiment")
+data class ExperimentRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val proposalSignature: String,
+    /** 사용자에게 그대로 보이는 가설 한 문장 */
+    val hypothesis: String,
+    /** 실험 동안 적용되는 조건 */
+    val conditionHours: String?,
+    val conditionWeekdays: String?,
+    /** 실험 전 원래 조건 — 롤백의 목적지 */
+    val prevHours: String?,
+    val prevWeekdays: String?,
+    val startedAt: Long,
+    val endsAt: Long,
+    val state: String,
+    /** 평가 요약 (evaluated 에서만) */
+    val verdict: String? = null,
+)
+
 /** 마지막 수집 시각 등 내부 상태 */
 @Entity(tableName = "kv")
 data class KvRow(@PrimaryKey val k: String, val v: String)
