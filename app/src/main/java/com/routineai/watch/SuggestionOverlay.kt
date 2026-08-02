@@ -136,7 +136,9 @@ object SuggestionOverlay {
             // 크게 한 번 차올랐다가 옅은 상시 발광으로 가라앉는다.
             val breath = 0.5f - 0.5f * kotlin.math.cos(phase * 2f * Math.PI.toFloat())
             val strength = breath + 0.2f * phase
-            val glowW = (0.09f + 0.07f * breath) * minOf(w, h)
+            // 폭은 가장자리 띠에 머문다 — 안쪽까지 차오르면 알림이 아니라
+            // 화면 전체가 물드는 느낌이 된다(실측 피드백).
+            val glowW = (0.045f + 0.03f * breath) * minOf(w, h)
 
             // 3단 그라데이션: 밝은 심 → 액센트 번짐 → 투명.
             val core = ((strength * 230).toInt().coerceIn(0, 255) shl 24) or coreRgb
