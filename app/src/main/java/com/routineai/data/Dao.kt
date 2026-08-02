@@ -115,7 +115,7 @@ interface UsageDao {
     @Query(
         "SELECT * FROM proposal_event WHERE kind IN " +
             "('accepted','not_now','dismissed','auto_applied','auto_failed','surfaced'," +
-            "'outcome_stayed','outcome_bounced','near_miss','ignored_then') " +
+            "'outcome','near_miss','ignored_then') " +
             "ORDER BY ts ASC"
     )
     suspend fun allDecisionEvents(): List<ProposalEventRow>

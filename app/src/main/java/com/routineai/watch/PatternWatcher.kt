@@ -73,10 +73,17 @@ object PatternWatcher {
     // 모른다. 실행이 유지로 이어졌는지, 조건이 기회를 죽이고 있는지,
     // 무시 뒤에 사용자가 스스로 무엇을 열었는지 — 실험 루프의 측정 기반이다.
 
-    /** 실행 결과 판정 대기 — 적용 후 90초 뒤에 유지/이탈을 본다 */
+    /**
+     * 실행 결과 측정 대기. 유지/이탈을 **판정하지 않는다** — 앱마다 정상
+     * 체류가 다르므로(잔고 확인 20초는 완료, 영상 20초는 어긋남) 경계를
+     * 어디 긋든 자의적이다. 머문 시간만 재고 판단은 심층 분석이 그 앱의
+     * 평소 체류(secondsPerLaunch)와 비교해서 한다.
+     */
     private data class PendingOutcome(val signature: String, val pkg: String, val at: Long)
     private val pendingOutcomes = ArrayList<PendingOutcome>()
-    private const val OUTCOME_MS = 90_000L
+
+    /** 이 이상 머물면 "충분히 오래"다 — 더 세지 않고 상한값으로 기록한다. */
+    private const val OUTCOME_CAP_S = 300
 
     /** 조건 밖 근접 발화의 시그니처별 마지막 기록 시각 — 기록 자체의 스팸 방지 */
     private val lastNearMiss = HashMap<String, Long>()
@@ -110,23 +117,39 @@ object PatternWatcher {
     }
 
     /**
-     * 감시 루프가 주기적으로 부른다. 판정 시각이 지난 실행 결과를 확정한다 —
-     * 적용 90초 뒤에도 그 앱에 있으면 유지, 다른 곳이면 이탈. 수락률만으로는
-     * "수락했는데 바로 닫는" 잘못된 발화를 볼 수 없다.
+     * 다른 앱으로 옮겨간 순간이 체류의 끝이다. [onAppForeground] 가 부른다.
+     * foreground 에는 떠나서 간 곳이 남는다 — 어디로 갔는지도 신호다.
      */
-    suspend fun evaluateOutcomes(ctx: Context) {
+    private suspend fun finalizeOutcomes(ctx: Context, nowPkg: String) {
         val now = System.currentTimeMillis()
-        val due = synchronized(pendingOutcomes) {
-            val d = pendingOutcomes.filter { now - it.at >= OUTCOME_MS }
+        val done = synchronized(pendingOutcomes) {
+            val d = pendingOutcomes.filter { it.pkg != nowPkg }
             pendingOutcomes.removeAll(d.toSet())
             d
         }
-        for (o in due) {
-            val stayed = lastForegroundPkg == o.pkg
+        for (o in done) {
             DecisionContext.log(
-                ctx, o.signature,
-                if (stayed) "outcome_stayed" else "outcome_bounced",
-                lastForegroundPkg,
+                ctx, o.signature, "outcome", nowPkg,
+                dwellSeconds = ((now - o.at) / 1000).toInt().coerceIn(0, OUTCOME_CAP_S),
+            )
+        }
+    }
+
+    /**
+     * 감시 루프가 주기적으로 부른다. 전환 없이 상한까지 머문 경우를 확정한다 —
+     * 그 이상은 "충분히 오래"라 더 셀 필요가 없다.
+     */
+    suspend fun evaluateOutcomes(ctx: Context) {
+        val now = System.currentTimeMillis()
+        val capped = synchronized(pendingOutcomes) {
+            val d = pendingOutcomes.filter { now - it.at >= OUTCOME_CAP_S * 1000L }
+            pendingOutcomes.removeAll(d.toSet())
+            d
+        }
+        for (o in capped) {
+            DecisionContext.log(
+                ctx, o.signature, "outcome", lastForegroundPkg,
+                dwellSeconds = OUTCOME_CAP_S,
             )
         }
     }
@@ -140,6 +163,9 @@ object PatternWatcher {
         }
         if (leaving.isNotEmpty()) persistModes(ctx)
         lastForegroundPkg = pkg
+
+        // 실행 결과: 다른 앱으로 옮겨간 순간이 체류의 끝이다.
+        finalizeOutcomes(ctx, pkg)
 
         // 무시 직후의 자발적 첫 앱. 런처는 경유지일 뿐이라 건너뛰고 기다린다.
         pendingIgnore?.let { pi ->

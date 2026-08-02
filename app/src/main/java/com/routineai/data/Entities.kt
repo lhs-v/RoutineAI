@@ -224,6 +224,15 @@ data class ProposalEventRow(
     /** 배터리 잔량 % — 거절의 숨은 이유일 수 있다 */
     @ColumnInfo(defaultValue = "-1")
     val batteryPct: Int = -1,
+
+    /**
+     * kind=outcome 에서 실행된 앱에 머문 시간(초). 300 = 그 이상.
+     * 유지/이탈의 **판정은 앱이 하지 않는다** — 앱마다 정상 체류가 다르다
+     * (잔고 확인 20초는 완료, 영상 앱 20초는 어긋남). 심층 분석이 그 앱의
+     * 평소 1회 체류(리포트의 secondsPerLaunch)와 비교해 판단한다.
+     */
+    @ColumnInfo(defaultValue = "-1")
+    val dwellSeconds: Int = -1,
 )
 
 /** 마지막 수집 시각 등 내부 상태 */

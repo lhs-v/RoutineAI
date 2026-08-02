@@ -127,6 +127,14 @@ class DeepAnalyzer(private val ctx: Context) {
         events: Map<String, List<ProposalEventRow>>,
     ): String {
         val t = Instant.now().atZone(ZoneId.systemDefault())
+        // outcome 의 dwellSec 을 판단할 잣대 — 그 앱의 평소 1회 체류.
+        // 마지막 리포트에서 꺼낸다. 리포트가 없으면 잣대 없이 보낸다.
+        val baseline: Map<String, Double> = runCatching {
+            json.decodeFromString(
+                com.routineai.analysis.Report.serializer(),
+                Settings(ctx).lastReport,
+            ).apps.associate { it.pkg to it.secondsPerLaunch }
+        }.getOrDefault(emptyMap())
         val input = buildJsonObject {
             put("now", buildJsonObject {
                 put("hour", t.hour)
@@ -155,6 +163,17 @@ class DeepAnalyzer(private val ctx: Context) {
                         ?: put("conditionHours", JsonNull)
                     p.conditionWeekdays?.let { put("conditionWeekdays", it) }
                         ?: put("conditionWeekdays", JsonNull)
+                    if (p.actionType == "launch_app") {
+                        val params = runCatching {
+                            json.decodeFromString<List<String>>(p.actionParams)
+                        }.getOrDefault(emptyList())
+                        val known = params.mapNotNull { pk -> baseline[pk]?.let { pk to it } }
+                        if (known.isNotEmpty()) {
+                            put("typicalSecondsPerLaunch", buildJsonObject {
+                                known.forEach { (pk, v) -> put(pk, v) }
+                            })
+                        }
+                    }
                     put("history", buildJsonArray {
                         // 상한을 결정/노출로 나눈다. 방해 예산이 보류되면서
                         // 노출(surfaced)이 많아졌는데, 하나의 상한을 같이 쓰면
@@ -177,6 +196,7 @@ class DeepAnalyzer(private val ctx: Context) {
                                 e.ringer?.let { put("ringer", it) }
                                 if (e.charging) put("charging", true)
                                 if (e.batteryPct in 0..100) put("battery", e.batteryPct)
+                                if (e.dwellSeconds >= 0) put("dwellSec", e.dwellSeconds)
                             })
                         }
                     })

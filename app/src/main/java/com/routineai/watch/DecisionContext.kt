@@ -27,6 +27,7 @@ object DecisionContext {
         foregroundPkg: String? = null,
         ts: Long = System.currentTimeMillis(),
         choice: String? = null,
+        dwellSeconds: Int = -1,
     ): ProposalEventRow {
         val t = Instant.ofEpochMilli(ts).atZone(zone)
         val (charging, batteryPct) = battery(ctx)
@@ -43,6 +44,7 @@ object DecisionContext {
             ringer = ringer(ctx),
             charging = charging,
             batteryPct = batteryPct,
+            dwellSeconds = dwellSeconds,
         )
     }
 
@@ -68,9 +70,10 @@ object DecisionContext {
         kind: String,
         foregroundPkg: String? = null,
         choice: String? = null,
+        dwellSeconds: Int = -1,
     ) {
         Db.get(ctx).dao().logProposalEvent(
-            capture(ctx, signature, kind, foregroundPkg, choice = choice)
+            capture(ctx, signature, kind, foregroundPkg, choice = choice, dwellSeconds = dwellSeconds)
         )
     }
 
