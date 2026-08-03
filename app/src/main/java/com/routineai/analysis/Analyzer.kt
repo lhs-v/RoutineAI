@@ -240,7 +240,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val appPairs = pairAgg.entries
             .filter { it.value.cycles.size >= 6 }
             .sortedByDescending { it.value.cycles.size }
-            .take(10)
+            .take(12)
             .map { (k, acc) ->
                 val n = acc.cycles.size
                 AppPairStat(
