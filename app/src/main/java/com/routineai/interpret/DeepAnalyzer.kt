@@ -53,6 +53,8 @@ class DeepAnalyzer(private val ctx: Context) {
      * 브리프 카드 — 에이전트가 사용자에게 직접 말을 거는 단위.
      * type: insight(통찰, [좋아요]) | question(실험 승인 요청, [해볼게요/그대로])
      *     | report(실험 보고, experimentId 있으면 [좋아요/되돌리기])
+     *     | refine(조건 정제 승인 요청, [적용할게요/그대로] — LLM 이 아니라
+     *       앱이 refinements 출력을 카드로 바꿔 만든다)
      * 응답은 결정 로그(brief_*)로 환류되어 다음 분석의 입력이 된다.
      */
     @Serializable
@@ -62,6 +64,7 @@ class DeepAnalyzer(private val ctx: Context) {
         val signature: String? = null,
         val experimentId: Long? = null,
         val experiment: LlmExperimentSpec? = null,
+        val refinement: LlmRefinement? = null,
     )
 
     @Serializable
@@ -122,36 +125,33 @@ class DeepAnalyzer(private val ctx: Context) {
             .getOrElse { return Result.failure(IllegalStateException("정제 JSON 파싱 실패: ${it.message}")) }
 
         onStep("결과 반영 중")
-        val now = System.currentTimeMillis()
         var refined = 0
         var skipped = 0
-        // 진행 중 실험의 조건은 실험이 소유한다 — 영구 정제가 덮어쓰면
-        // 롤백 목적지가 어긋난다. (에이전트가 이번 턴에 conclude 로 마감한
-        // 실험은 running 이 아니므로 확정이 통과한다.)
+        // 정제를 바로 적용하지 않는다 — 조건이 바뀌면 팝업이 뜨는 창 자체가
+        // 바뀌는데, 그걸 사용자가 모르는 새 하면 "몰래 바꾸는 앱"이 된다.
+        // 실험(해볼게요)과 같은 규약으로 승인 카드에 올리고, 적용은
+        // [applyRefinement] 가 사용자의 탭에서만 한다.
         val experimentOwned = dao.runningExperiments().map { it.proposalSignature }.toSet()
+        val refineCards = ArrayList<LlmBriefCard>()
         for (r in parsed.refinements) {
             val row = dao.proposal(r.signature)
             if (row == null || row.state == "dismissed" || !valid(r)) { skipped++; continue }
+            // 진행 중 실험의 조건은 실험이 소유한다 — 정제가 덮어쓰면 롤백
+            // 목적지가 어긋난다. 승인 시점에도 다시 검사한다(그새 시작될 수 있다).
             if (r.signature in experimentOwned) { skipped++; continue }
-            dao.upsertProposal(
-                row.copy(
-                    conditionHours = r.conditionHours?.takeIf { it.isNotBlank() },
-                    conditionWeekdays = r.conditionWeekdays?.takeIf { it.isNotBlank() },
-                    suggestAutoRun = r.suggestAutoRun,
-                    insight = r.insight.ifBlank { null },
-                    refinedAt = now,
-                    updatedAt = now,
-                )
-            )
-            dao.logProposalEvent(
-                ProposalEventRow(ts = now, proposalSignature = r.signature, kind = "refined")
+            refineCards += LlmBriefCard(
+                type = "refine",
+                text = r.insight.ifBlank { "이 루틴의 조건을 좁히는 게 좋아 보여요." },
+                signature = r.signature,
+                refinement = r,
             )
             refined++
         }
 
         // 브리프 카드 — 검증 통과분만 저장한다. 응답 버튼이 실제 동작(실험
-        // 시작·취소)과 연결되므로 깨진 카드가 화면에 오르면 안 된다.
-        val cards = parsed.briefCards.filter { validCard(it) }.take(3)
+        // 시작·취소·정제 적용)과 연결되므로 깨진 카드가 화면에 오르면 안 된다.
+        // 정제 승인 카드가 앞 — 응답이 곧 변경이라 눈에 먼저 띄어야 한다.
+        val cards = refineCards + parsed.briefCards.filter { validCard(it) }.take(3)
         Settings(ctx).lastBriefCards = encodeCards(cards)
 
         return Result.success(Outcome(refined, skipped, parsed.brief, parsed.analysisNote))
@@ -554,6 +554,35 @@ class DeepAnalyzer(private val ctx: Context) {
 
     companion object {
         private val DECISION_KINDS = setOf("accepted", "not_now", "dismissed")
+
+        /**
+         * 정제 승인 카드의 [적용할게요] — 여기가 유일한 적용 지점이다.
+         * 카드가 하루 뒤에 눌릴 수 있으므로 상태 검사를 다시 한다.
+         */
+        suspend fun applyRefinement(ctx: Context, r: LlmRefinement): String {
+            val dao = Db.get(ctx).dao()
+            val row = dao.proposal(r.signature)
+                ?: return "이 루틴이 더는 없어 적용하지 않았습니다"
+            if (row.state == "dismissed") return "거절된 루틴이라 적용하지 않았습니다"
+            if (dao.runningExperiments().any { it.proposalSignature == r.signature }) {
+                return "진행 중인 실험이 조건을 쓰고 있어 적용하지 않았습니다"
+            }
+            val now = System.currentTimeMillis()
+            dao.upsertProposal(
+                row.copy(
+                    conditionHours = r.conditionHours?.takeIf { it.isNotBlank() },
+                    conditionWeekdays = r.conditionWeekdays?.takeIf { it.isNotBlank() },
+                    suggestAutoRun = r.suggestAutoRun,
+                    insight = r.insight.ifBlank { null },
+                    refinedAt = now,
+                    updatedAt = now,
+                )
+            )
+            dao.logProposalEvent(
+                ProposalEventRow(ts = now, proposalSignature = r.signature, kind = "refined")
+            )
+            return "적용했습니다"
+        }
 
         private val cardsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 

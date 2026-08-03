@@ -334,7 +334,7 @@ class MainActivity : ComponentActivity() {
                                         prefs.lastBrief = o.brief
                                         prefs.lastBriefAt = System.currentTimeMillis()
                                         prefs.lastRefineNote = buildString {
-                                            append("정제 ${o.refined}건")
+                                            append("정제 제안 ${o.refined}건 — 위 카드에서 승인하면 적용됩니다")
                                             if (o.skipped > 0) append(" · 건너뜀 ${o.skipped}건")
                                             if (o.analysisNote.isNotBlank()) {
                                                 appendLine(); append(o.analysisNote)
@@ -1069,6 +1069,7 @@ class MainActivity : ComponentActivity() {
                     when (card.type) {
                         "question" -> "실험 제안"
                         "report" -> "보고"
+                        "refine" -> "조건 정제 제안"
                         else -> "통찰"
                     },
                     style = MaterialTheme.typography.labelSmall,
@@ -1082,6 +1083,22 @@ class MainActivity : ComponentActivity() {
                             e.conditionWeekdays?.let { append("요일 $it ") }
                             e.conditionHours?.let { append("시간 $it ") }
                             append("· ${e.days}일 뒤 자동 원복")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0x99FFFFFF),
+                    )
+                }
+                card.refinement?.let { r ->
+                    Text(
+                        buildString {
+                            append("적용하면: ")
+                            r.conditionWeekdays?.let { append("요일 $it ") }
+                            r.conditionHours?.let { append("시간 $it ") }
+                            if (r.conditionWeekdays == null && r.conditionHours == null) {
+                                append("조건 제한 없음 ")
+                            }
+                            append("— 팝업이 이 창에서만 뜹니다")
+                            if (r.suggestAutoRun) append(" · 자동 실행 추천")
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0x99FFFFFF),
@@ -1116,6 +1133,16 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }) { Text("되돌리기") }
                             }
+                        }
+                        "refine" -> {
+                            Button(colors = primaryColors, onClick = {
+                                answer(card, "brief_approve") {
+                                    DeepAnalyzer.applyRefinement(ctx, card.refinement!!)
+                                }
+                            }) { Text("적용할게요") }
+                            OutlinedButton(colors = outlineColors, onClick = {
+                                answer(card, "brief_decline") { null }
+                            }) { Text("그대로 둘게요") }
                         }
                         else -> Button(colors = primaryColors, onClick = {
                             answer(card, "brief_ack") { null }
