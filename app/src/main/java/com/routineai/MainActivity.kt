@@ -1361,6 +1361,24 @@ class MainActivity : ComponentActivity() {
                         "이 기기의 사용 기록이 아닙니다."
                 )
             }
+            // 심층 분석 시연의 지름길 — 실사용이면 일주일 걸리는 결정 이력을
+            // 한 번에 심는다. 갈림(평일 아침 수락 / 저녁·주말 미룸)이 선명해
+            // 심층 분석이 조건 좁히기를 제안하는 것을 바로 보여줄 수 있다.
+            var seedMsg by remember { mutableStateOf("") }
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    lifecycleScope.launch {
+                        seedMsg = withContext(Dispatchers.IO) {
+                            com.routineai.interpret.DemoSeed.plantHeroTossStory(ctx)
+                        }
+                        onChanged()
+                    }
+                },
+            ) { Text("데모: 증권 페어 루틴 + 일주일 결정 이력 심기") }
+            if (seedMsg.isNotBlank()) {
+                Notice(OK, seedMsg)
+            }
 
             // ---- 1. 권한 ----
             Section("1. 권한", "설치만으로는 아무것도 켜지지 않습니다. 직접 허용해야 합니다.")

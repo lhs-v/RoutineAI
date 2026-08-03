@@ -96,6 +96,9 @@ interface UsageDao {
     @Query("UPDATE experiment SET proposalSignature = :newSig WHERE proposalSignature = :oldSig")
     suspend fun migrateExperiments(oldSig: String, newSig: String)
 
+    @Query("DELETE FROM proposal_event WHERE proposalSignature = :sig")
+    suspend fun deleteProposalEvents(sig: String)
+
     @Query("DELETE FROM proposal")
     suspend fun clearProposals()
 
