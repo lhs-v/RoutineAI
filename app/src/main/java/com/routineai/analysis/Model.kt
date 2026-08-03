@@ -283,8 +283,14 @@ data class AppPairStat(
     val abPct: Double,
     /** 왕복 주기 — 한쪽을 열고 반대쪽을 열기까지 (체류 포함 리듬) */
     val medianCycleSeconds: Int,
-    /** 갈아타기 — 한쪽을 떠나 반대쪽을 열기까지 (홈 체류). 몇 초면 한 흐름 */
+    /** 갈아타기 — 한쪽을 떠나 반대쪽을 열기까지 (홈 체류) 중앙값 */
     val medianSwitchSeconds: Int,
+    /**
+     * 긴 갈아타기(30초 초과) 비율 0~100. 중앙값은 판별력이 없다 — 실측상
+     * 거의 모든 홈 경유가 1~5초라 다 비슷하다. 갈리는 것은 꼬리다:
+     * 한 흐름 페어는 0~5%, 홈에서 딴 일을 보는 병행은 15%+ (실측).
+     */
+    val switchLongPct: Double,
     /** 홈 화면을 거친 비율 0~100. 높을수록 전환 마찰이 크다 */
     val viaLauncherPct: Double,
     /** 분할화면 동시 사용 횟수 */

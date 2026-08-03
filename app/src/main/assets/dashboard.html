@@ -280,7 +280,7 @@ window.renderReport=function(D){
       <table><thead><tr><th>조합</th><th>왕복</th><th>주기/갈아타기</th><th>홈 경유</th>
       <th>분할화면</th><th>반복일</th></tr></thead><tbody>${
       D.appPairs.map(p=>`<tr><td>${p.a} ┃ ${p.b}</td><td>${p.roundTrips}회</td>
-        <td>${p.medianCycleSeconds}초 / ${p.medianSwitchSeconds}초</td><td>${Math.round(p.viaLauncherPct)}%</td>
+        <td>${p.medianCycleSeconds}초 / ${p.medianSwitchSeconds}초 · 긴 ${Math.round(p.switchLongPct||0)}%</td><td>${Math.round(p.viaLauncherPct)}%</td>
         <td>${p.coUseCount?p.coUseCount+"회":"—"}</td><td>${p.distinctDays}일</td></tr>`).join("")
       }</tbody></table></div>
       <p class="empty">간격이 짧고 홈 경유가 낮고 분할화면 실측이 있을수록 "한 세트로 쓰는

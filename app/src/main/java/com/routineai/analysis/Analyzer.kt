@@ -249,6 +249,8 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                     abPct = (acc.ab * 100.0 / n).r2(),
                     medianCycleSeconds = acc.cycles.map { it.toDouble() }.median().roundToInt(),
                     medianSwitchSeconds = acc.switches.map { it.toDouble() }.median().roundToInt(),
+                    switchLongPct = if (acc.switches.isEmpty()) 0.0
+                    else (acc.switches.count { it > 30 } * 100.0 / acc.switches.size).r2(),
                     viaLauncherPct = (acc.via * 100.0 / n).r2(),
                     coUseCount = s.coUse[k]?.size ?: 0,
                     distinctDays = acc.days.size,

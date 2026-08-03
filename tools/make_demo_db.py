@@ -270,11 +270,11 @@ def synth_shopping():
     RESUMED, SCREEN_ON, SCREEN_OFF = 1, 15, 16
     LAUNCHER = "com.sec.android.app.launcher"
     BOUTS = [
-        ("2026-07-21", 19, 48, "com.coupang.mobile", "com.nhn.android.shoppingn"),
-        ("2026-07-22", 20, 12, "com.coupang.mobile", "com.nhn.android.shoppingn"),
-        ("2026-07-23", 19, 55, "com.nhn.android.shoppingn", "com.coupang.mobile"),
-        ("2026-07-28", 20, 31, "com.coupang.mobile", "com.nhn.android.shoppingn"),
-        ("2026-07-30", 19, 42, "com.coupang.mobile", "com.nhn.android.shoppingn"),
+        ("2026-07-21", 19, 48, "com.coupang.mobile", "com.navercorp.navershopping"),
+        ("2026-07-22", 20, 12, "com.coupang.mobile", "com.navercorp.navershopping"),
+        ("2026-07-23", 19, 55, "com.navercorp.navershopping", "com.coupang.mobile"),
+        ("2026-07-28", 20, 31, "com.coupang.mobile", "com.navercorp.navershopping"),
+        ("2026-07-30", 19, 42, "com.coupang.mobile", "com.navercorp.navershopping"),
         ("2026-07-25", 14, 20, "com.towneers.www", "kr.co.quicket"),
         ("2026-07-26", 15, 5, "kr.co.quicket", "com.towneers.www"),
         ("2026-08-01", 14, 47, "com.towneers.www", "kr.co.quicket"),
