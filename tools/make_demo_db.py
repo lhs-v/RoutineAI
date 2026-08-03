@@ -262,7 +262,8 @@ def synth_shopping():
     목적: ① 갈아타기(medianSwitchSeconds) 지표의 실증 — 체류가 길어 왕복
     주기(60초)로는 문턱을 넘지만 갈아타기 몇 초로 살아나는 페어 형태,
     ② 같은 '쇼핑' 행동이 요일 축으로 갈리는 두 페어 — 심층 분석의 조건
-    발견 재료. 시드 고정이라 재실행해도 같은 행(유니크 인덱스로 멱등).
+    발견 재료. 합성 행은 cls='synth' 로 표시한다 — 실측과 항상 구분되고,
+    재실행 시 이 표시로 지우고 다시 만들므로 파라미터를 바꿔도 멱등이다.
     """
     import random
     from datetime import datetime
@@ -281,6 +282,7 @@ def synth_shopping():
     ]
     con = sqlite3.connect(ASSET)
     cur = con.cursor()
+    cur.execute("DELETE FROM usage_event WHERE cls = 'synth'")
 
     def free_slot(ts, span_ms):
         for _ in range(8):
@@ -301,12 +303,12 @@ def synth_shopping():
         for i in range(rng.randint(5, 7)):
             rows.append((t, RESUMED, [a, b_][i % 2]))
             t += rng.randint(40_000, 95_000)      # 상품을 훑는 긴 체류
-            rows.append((t, RESUMED, LAUNCHER))    # 홈은 3~8초 — 통로일 뿐
-            t += rng.randint(3_000, 8_000)
+            rows.append((t, RESUMED, LAUNCHER))    # 홈은 0.5~2초 — 실측 페어들
+            t += rng.randint(500, 2_000)           # (중앙 1~3초)과 같은 통로 수준
         rows.append((t + rng.randint(1000, 3000), SCREEN_OFF, LAUNCHER))
         for ts, typ, pkg in rows:
             cur.execute("INSERT OR IGNORE INTO usage_event(ts, type, pkg, cls) "
-                        "VALUES(?,?,?,NULL)", (ts, typ, pkg))
+                        "VALUES(?,?,?,'synth')", (ts, typ, pkg))
             ins += cur.rowcount
     con.commit(); con.close()
     print(f"쇼핑 합성 {ins}행")
