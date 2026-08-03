@@ -64,7 +64,7 @@ object DemoSeed {
         dao.deleteProposalEvents(SIGNATURE)
 
         val rng = Random(42)
-        var mornings = 0; var evenings = 0; var weekends = 0
+        var mornings = 0; var afternoons = 0; var evenings = 0; var weekends = 0
 
         fun row(ts: Long, h: Int, weekday: Int, kind: String, net: String,
                 ringer: String, charging: Boolean, battery: Int) = ProposalEventRow(
@@ -102,6 +102,13 @@ object DemoSeed {
                 val net = if (rng.nextInt(3) == 0) "cellular" else "wifi"
                 pair(day, 9, rng.nextInt(0, 14), "accepted", net, "sound", false, 75 + rng.nextInt(21))
                 mornings++
+                // 평일 절반쯤은 오후 3시 반 무렵에도 수락 — 시각 자체는 원시
+                // 값일 뿐이고, 9시·15:30 이 장 시작·마감이라는 해석은 심층
+                // 분석의 세계지식이 붙이는 것이다(그게 이 데모의 핵심 장면).
+                if (rng.nextInt(2) == 0) {
+                    pair(day, 15, 24 + rng.nextInt(12), "accepted", "wifi", "vibrate", false, 40 + rng.nextInt(31))
+                    afternoons++
+                }
                 // 평일 사흘쯤은 저녁에도 열었지만, 그때는 미뤘다.
                 if (rng.nextInt(5) < 3) {
                     val h = 19 + rng.nextInt(3)
@@ -115,7 +122,7 @@ object DemoSeed {
             }
         }
 
-        return "심었습니다 — 평일 아침 수락 ${mornings}회 · 평일 저녁 미룸 ${evenings}회 · " +
-            "주말 미룸 ${weekends}회. 루틴 탭에서 심층 분석을 돌려보세요."
+        return "심었습니다 — 평일 아침 수락 ${mornings}회 · 오후 3시 반 수락 ${afternoons}회 · " +
+            "평일 저녁 미룸 ${evenings}회 · 주말 미룸 ${weekends}회. 루틴 탭에서 심층 분석을 돌려보세요."
     }
 }
