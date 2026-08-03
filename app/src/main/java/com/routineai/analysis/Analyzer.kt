@@ -188,7 +188,12 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         onStep("앱 전환 분석 중")
 
         // ---- 앱 전환 (홈·동시실행 제외) ----
-        val trans = HashMap<Pair<String, String>, MutableList<Long>>()
+        //
+        // 시간 축 둘을 따로 잰다. 왕복 주기(열고→열기)는 확인 리듬이고,
+        // 갈아타기(떠나→열기 = 홈 체류)는 이동의 즉시성이다. 하나로 합치면
+        // 오래 보고 곧장 건너가는 진짜 페어가 체류 시간 때문에 가려진다.
+        val transCycle = HashMap<Pair<String, String>, MutableList<Long>>()
+        val transSwitch = HashMap<Pair<String, String>, MutableList<Long>>()
         val transVia = HashMap<Pair<String, String>, Int>()
         val transDays = HashMap<Pair<String, String>, MutableSet<LocalDate>>()
         for (s0 in sessions) {
@@ -197,47 +202,53 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
                 val a = sp[i]; val b = sp[i + 1]
                 if (a.pkg == b.pkg) continue
                 val k = a.pkg to b.pkg
-                trans.getOrPut(k) { ArrayList() }.add((b.start - a.start) / 1000)
+                transCycle.getOrPut(k) { ArrayList() }.add((b.start - a.start) / 1000)
+                transSwitch.getOrPut(k) { ArrayList() }.add(maxOf(0L, b.start - a.end) / 1000)
                 if (b.viaLauncher) transVia.merge(k, 1, Int::plus)
                 transDays.getOrPut(k) { HashSet() }.add(a.start.toLocalDate())
             }
         }
-        val transitions = trans.entries.map { (k, gaps) ->
+        val transitions = transCycle.entries.map { (k, cycles) ->
             TransitionStat(
                 from = label(k.first), to = label(k.second),
-                count = gaps.size,
+                count = cycles.size,
                 viaLauncher = transVia[k] ?: 0,
-                medianGapSeconds = gaps.map { it.toDouble() }.median().roundToInt(),
+                medianCycleSeconds = cycles.map { it.toDouble() }.median().roundToInt(),
+                medianSwitchSeconds = (transSwitch[k] ?: mutableListOf())
+                    .map { it.toDouble() }.median().roundToInt(),
                 distinctDays = transDays[k]?.size ?: 0,
             )
         }.sortedByDescending { it.count }.take(20)
 
         // ---- 앱 페어: 양방향 전환 합산 + 분할화면 결합 ----
         class PairAcc {
-            val gaps = ArrayList<Long>()
+            val cycles = ArrayList<Long>()
+            val switches = ArrayList<Long>()
             var ab = 0; var via = 0
             val days = HashSet<LocalDate>()
         }
         val pairAgg = HashMap<Pair<String, String>, PairAcc>()
-        for ((k, gaps) in trans) {
+        for ((k, cycles) in transCycle) {
             val sorted = if (k.first < k.second) k else k.second to k.first
             val acc = pairAgg.getOrPut(sorted) { PairAcc() }
-            acc.gaps += gaps
-            if (k == sorted) acc.ab += gaps.size
+            acc.cycles += cycles
+            acc.switches += transSwitch[k] ?: mutableListOf()
+            if (k == sorted) acc.ab += cycles.size
             acc.via += transVia[k] ?: 0
             acc.days += transDays[k] ?: emptySet()
         }
         val appPairs = pairAgg.entries
-            .filter { it.value.gaps.size >= 6 }
-            .sortedByDescending { it.value.gaps.size }
+            .filter { it.value.cycles.size >= 6 }
+            .sortedByDescending { it.value.cycles.size }
             .take(10)
             .map { (k, acc) ->
-                val n = acc.gaps.size
+                val n = acc.cycles.size
                 AppPairStat(
                     a = label(k.first), b = label(k.second),
                     roundTrips = n,
                     abPct = (acc.ab * 100.0 / n).r2(),
-                    medianGapSeconds = acc.gaps.map { it.toDouble() }.median().roundToInt(),
+                    medianCycleSeconds = acc.cycles.map { it.toDouble() }.median().roundToInt(),
+                    medianSwitchSeconds = acc.switches.map { it.toDouble() }.median().roundToInt(),
                     viaLauncherPct = (acc.via * 100.0 / n).r2(),
                     coUseCount = s.coUse[k]?.size ?: 0,
                     distinctDays = acc.days.size,

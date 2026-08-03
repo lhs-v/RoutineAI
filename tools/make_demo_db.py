@@ -252,6 +252,66 @@ def backfill_bt(adb_path):
         print("BT 이력 없음")
 
 
+def synth_shopping():
+    """
+    쇼핑 페어 로그를 합성한다. --synth-shopping 으로만 실행된다.
+
+    - 평일 저녁: 쿠팡 ↔ 네이버 쇼핑 (비교 쇼핑 — 한쪽을 오래 보고 곧장 건너감)
+    - 주말 오후: 당근 ↔ 번개장터 (중고 탐색)
+
+    목적: ① 갈아타기(medianSwitchSeconds) 지표의 실증 — 체류가 길어 왕복
+    주기(60초)로는 문턱을 넘지만 갈아타기 몇 초로 살아나는 페어 형태,
+    ② 같은 '쇼핑' 행동이 요일 축으로 갈리는 두 페어 — 심층 분석의 조건
+    발견 재료. 시드 고정이라 재실행해도 같은 행(유니크 인덱스로 멱등).
+    """
+    import random
+    from datetime import datetime
+    rng = random.Random(42)
+    RESUMED, SCREEN_ON, SCREEN_OFF = 1, 15, 16
+    LAUNCHER = "com.sec.android.app.launcher"
+    BOUTS = [
+        ("2026-07-21", 19, 48, "com.coupang.mobile", "com.nhn.android.shoppingn"),
+        ("2026-07-22", 20, 12, "com.coupang.mobile", "com.nhn.android.shoppingn"),
+        ("2026-07-23", 19, 55, "com.nhn.android.shoppingn", "com.coupang.mobile"),
+        ("2026-07-28", 20, 31, "com.coupang.mobile", "com.nhn.android.shoppingn"),
+        ("2026-07-30", 19, 42, "com.coupang.mobile", "com.nhn.android.shoppingn"),
+        ("2026-07-25", 14, 20, "com.towneers.www", "kr.co.quicket"),
+        ("2026-07-26", 15, 5, "kr.co.quicket", "com.towneers.www"),
+        ("2026-08-01", 14, 47, "com.towneers.www", "kr.co.quicket"),
+    ]
+    con = sqlite3.connect(ASSET)
+    cur = con.cursor()
+
+    def free_slot(ts, span_ms):
+        for _ in range(8):
+            n = cur.execute(
+                "SELECT COUNT(*) FROM usage_event WHERE ts BETWEEN ? AND ?",
+                (ts - 120_000, ts + span_ms + 120_000)).fetchone()[0]
+            if n == 0:
+                return ts
+            ts += 15 * 60_000
+        return ts
+
+    ins = 0
+    for date, h, m, a, b_ in BOUTS:
+        t = free_slot(int(datetime.fromisoformat(
+            f"{date}T{h:02d}:{m:02d}:00").timestamp() * 1000), 12 * 60_000)
+        rows = [(t, SCREEN_ON, LAUNCHER)]
+        t += rng.randint(1500, 3000)
+        for i in range(rng.randint(5, 7)):
+            rows.append((t, RESUMED, [a, b_][i % 2]))
+            t += rng.randint(40_000, 95_000)      # 상품을 훑는 긴 체류
+            rows.append((t, RESUMED, LAUNCHER))    # 홈은 3~8초 — 통로일 뿐
+            t += rng.randint(3_000, 8_000)
+        rows.append((t + rng.randint(1000, 3000), SCREEN_OFF, LAUNCHER))
+        for ts, typ, pkg in rows:
+            cur.execute("INSERT OR IGNORE INTO usage_event(ts, type, pkg, cls) "
+                        "VALUES(?,?,?,NULL)", (ts, typ, pkg))
+            ins += cur.rowcount
+    con.commit(); con.close()
+    print(f"쇼핑 합성 {ins}행")
+
+
 def synth_bt():
     """
     사용자가 밝힌 습관("유튜브 뮤직 전엔 보통 이어폰을 연결, 유튜브는 종종")을
@@ -406,6 +466,8 @@ if __name__ == "__main__":
                     help="시작점 통일(사용 이벤트 이전 구간 제거)을 건너뛴다")
     ap.add_argument("--synth-bt", action="store_true",
                     help="사용자가 밝힌 이어폰 습관을 실행 시각에 앵커해 합성 (majorClass=-1 표시)")
+    ap.add_argument("--synth-shopping", action="store_true",
+                    help="쇼핑 페어(평일 저녁 쿠팡↔네이버쇼핑, 주말 당근↔번개장터) 합성")
     args = ap.parse_args()
 
     a = None if (args.no_pull and args.dump) else adb()
@@ -428,3 +490,5 @@ if __name__ == "__main__":
     backfill_bt(a or adb())
     if args.synth_bt:
         synth_bt()
+    if args.synth_shopping:
+        synth_shopping()

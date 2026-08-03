@@ -242,14 +242,23 @@ data class AppContextStat(
     val topHours: List<Int>,
 )
 
-/** 홈 화면과 동시 실행을 걷어낸 순수 앱→앱 이동 */
+/**
+ * 홈 화면과 동시 실행을 걷어낸 순수 앱→앱 이동.
+ *
+ * 두 시간 축을 나눠 싣는다 — 하나로 합치면 체류와 이동이 섞여서
+ * "오래 보고 곧장 건너가는" 진짜 페어가 가려진다(실측 논의로 확인):
+ *  - 왕복 주기(cycle): 앞 앱을 **열고** 다음 앱을 열기까지 — 확인 리듬
+ *  - 갈아타기(switch): 앞 앱을 **떠나** 다음 앱을 열기까지 — 홈에 머문
+ *    시간. 0 = 곧장 전환, 몇 초 = 홈을 통로로만 씀, 길면 홈에서 딴 일
+ */
 @Serializable
 data class TransitionStat(
     val from: String,
     val to: String,
     val count: Int,
     val viaLauncher: Int,
-    val medianGapSeconds: Int,
+    val medianCycleSeconds: Int,
+    val medianSwitchSeconds: Int,
     val distinctDays: Int,
 )
 
@@ -272,7 +281,10 @@ data class AppPairStat(
     val roundTrips: Int,
     /** a→b 비율 0~100. 50 근처면 왕복, 극단이면 한 방향 흐름 */
     val abPct: Double,
-    val medianGapSeconds: Int,
+    /** 왕복 주기 — 한쪽을 열고 반대쪽을 열기까지 (체류 포함 리듬) */
+    val medianCycleSeconds: Int,
+    /** 갈아타기 — 한쪽을 떠나 반대쪽을 열기까지 (홈 체류). 몇 초면 한 흐름 */
+    val medianSwitchSeconds: Int,
     /** 홈 화면을 거친 비율 0~100. 높을수록 전환 마찰이 크다 */
     val viaLauncherPct: Double,
     /** 분할화면 동시 사용 횟수 */

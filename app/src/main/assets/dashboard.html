@@ -277,10 +277,10 @@ window.renderReport=function(D){
   /* 앱 페어 후보 — 양방향 왕복 + 분할화면 결합 */
   if((D.appPairs||[]).length){
     add(`<h2>앱 페어 후보</h2><div class="card"><div class="scroll">
-      <table><thead><tr><th>조합</th><th>왕복</th><th>중앙 간격</th><th>홈 경유</th>
+      <table><thead><tr><th>조합</th><th>왕복</th><th>주기/갈아타기</th><th>홈 경유</th>
       <th>분할화면</th><th>반복일</th></tr></thead><tbody>${
       D.appPairs.map(p=>`<tr><td>${p.a} ┃ ${p.b}</td><td>${p.roundTrips}회</td>
-        <td>${p.medianGapSeconds}초</td><td>${Math.round(p.viaLauncherPct)}%</td>
+        <td>${p.medianCycleSeconds}초 / ${p.medianSwitchSeconds}초</td><td>${Math.round(p.viaLauncherPct)}%</td>
         <td>${p.coUseCount?p.coUseCount+"회":"—"}</td><td>${p.distinctDays}일</td></tr>`).join("")
       }</tbody></table></div>
       <p class="empty">간격이 짧고 홈 경유가 낮고 분할화면 실측이 있을수록 "한 세트로 쓰는
@@ -548,7 +548,7 @@ function transChart(host,tr){
     if(wv>0)el("rect",{x:L+wd+2,y:y+4,width:Math.max(wv-2,1),height:rh-9,rx:3.5,
       fill:cs("--s4")},s);
     el("text",{x:L+wd+wv+6,y:y+rh/2+3.5,class:"vlab"},s)
-      .textContent=t.count+"회 · "+t.medianGapSeconds+"초";
+      .textContent=t.count+"회 · 주기 "+t.medianCycleSeconds+"초 · 갈아타기 "+t.medianSwitchSeconds+"초";
   });
 }
 </script>
