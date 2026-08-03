@@ -245,14 +245,36 @@ object SuggestionOverlay {
         // 선택지 숏컷: launch_app 에 후보가 둘이면 실행 버튼을 두 개로.
         // "습관은 Music, 가끔은 YouTube" 같은 갈래를 하나로 뭉개지 않는다 —
         // 어느 쪽을 골랐는지가 기록되어 심층 분석의 정제 재료가 된다.
+        //
+        // 선택지는 **별도 줄**에, 둘 다 액센트로 — 거절 버튼들과 한 줄에 섞으면
+        // 두 번째 선택지가 거절 버튼과 같은 모양이 되어 실행 버튼으로 읽히지
+        // 않는다(실측 신고: "첫 앱만 효과 있는 버튼으로 보인다").
         val choices = if (p.actionType == "launch_app") Applier.params(p) else emptyList()
         if (choices.size >= 2) {
-            row.addView(button(ctx, "${appLabel(ctx, choices[0])} 열기", accent, primary = true, weight = 1.3f) {
-                acceptAndApply(choices[0])
-            })
-            row.addView(button(ctx, appLabel(ctx, choices[1]), accent, primary = false, weight = 1f) {
-                acceptAndApply(choices[1])
-            })
+            val choiceRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(ctx, 10), 0, 0)
+            }
+            choiceRow.addView(
+                button(ctx, "${appLabel(ctx, choices[0])} 열기", accent, primary = true, weight = 1f) {
+                    acceptAndApply(choices[0])
+                }
+            )
+            choiceRow.addView(
+                button(ctx, "${appLabel(ctx, choices[1])} 열기", accent, primary = false, weight = 1f) {
+                    acceptAndApply(choices[1])
+                }.apply {
+                    // 액센트 테두리 + 액센트 글자 — "덜 강한 실행"이지 거절이 아니다
+                    setTextColor(accent)
+                    background = GradientDrawable().apply {
+                        cornerRadius = 999f
+                        setColor(Color.TRANSPARENT)
+                        setStroke(dp(ctx, 1), accent)
+                    }
+                }
+            )
+            root.addView(choiceRow)
+            row.setPadding(0, dp(ctx, 7), 0, 0)
         } else {
             row.addView(
                 button(ctx, if (shortcut) "열기" else primaryLabel(p), accent, primary = true, weight = 2f) {

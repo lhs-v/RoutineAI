@@ -69,6 +69,19 @@ object PatternWatcher {
 
     private var lastForegroundPkg: String? = null
 
+    /**
+     * 지금 앞 앱이 앞으로 나온 시각 — "이번 방문"의 시작. 접근성은 앱 안의
+     * 화면 전환도 재보고하므로, 방문 개념이 없으면 같은 앱에 머무는 동안
+     * 20초 간격마다 알약이 반복된다(실측 신고).
+     */
+    private var foregroundSince = 0L
+
+    /** 앱별 마지막 목격 시각 — 앱페어의 "이미 함께 쓰는 중" 판정 재료 */
+    private val pkgLastSeen = HashMap<String, Long>()
+
+    /** 이 안에 상대 앱을 썼다면 페어를 이미 함께 쓰는 중이다 — 제안이 무의미 */
+    private const val PAIR_FLOW_MS = 3L * 60 * 1000
+
     // ---- 루틴 중심 로그: 루틴 자체의 삶을 기록한다 ----
     //
     // 사용자 중심 로그(앱 사용·결정)만으로는 "이 루틴이 잘 살고 있는가"를
@@ -172,6 +185,8 @@ object PatternWatcher {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
         }
         if (leaving.isNotEmpty()) persistModes(ctx)
+        if (lastForegroundPkg != pkg) foregroundSince = System.currentTimeMillis()
+        pkgLastSeen[pkg] = System.currentTimeMillis()
         lastForegroundPkg = pkg
 
         // 실행 결과: 다른 앱으로 옮겨간 순간이 체류의 끝이다.
@@ -282,14 +297,27 @@ object PatternWatcher {
                 }
                 continue
             }
+            // 같은 방문에서 두 번 묻지 않는다 — 앱에 머무는 동안 접근성이
+            // 화면 전환을 재보고해도 알약이 반복되면 안 된다(실측 신고).
+            if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
+            // 이미 페어를 함께 쓰는 중이면 제안이 무의미하다 — 방금 상대
+            // 앱을 쓰고 왔다면(번갈아 사용) 조용히 둔다. 후보에는 적용하지
+            // 않는다: 후보에게는 그 순간이 바로 "이 흐름 반복 중이죠?"다.
+            if (p.actionType == "app_pair") {
+                val partner = Applier.params(p).firstOrNull { it != param }
+                if (partner != null && now - (pkgLastSeen[partner] ?: 0L) < PAIR_FLOW_MS) continue
+            }
             if (canSurface(p, now)) {
                 surface(ctx, p, now, shortcut = false)
                 return
             }
         }
 
-        // 2) 후보 — 본 적 없는 맥락에서만 물어본다.
+        // 2) 후보 — 본 적 없는 맥락에서만 물어본다. 1차 분석이 조건을 붙였으면
+        //    후보도 그 조건 안에서만 뜬다("밤에"라고 제안해놓고 낮에 뜨면 안 된다).
         for (p in matched.filter { it.state !in setOf("accepted", "dismissed") }) {
+            if (!inCondition(p, here)) continue
+            if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
             if (!canSurface(p, now)) continue
             if (rejectedHereBefore(dao, p, hereBucket)) continue
             surface(ctx, p, now, shortcut = false)

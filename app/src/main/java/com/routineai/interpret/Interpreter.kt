@@ -80,8 +80,13 @@ class Interpreter(private val ctx: Context) {
      *
      * @param reportJson [com.routineai.analysis.Report] 를 직렬화한 문자열
      */
-    fun propose(reportJson: String, cfg: AzureConfig): Result<String> =
-        requestJson(cfg, skillPrompt(), userPrompt(reportJson))
+    /**
+     * @param portfolioJson 기존 제안 포트폴리오(시그니처·상태 포함). 있으면
+     *   분석이 증분이 된다 — 백지에서 top-5 를 다시 뽑는 대신, 이미 발굴된
+     *   것을 피해 다음 층위를 파고 변형은 updateOf 로 낸다.
+     */
+    fun propose(reportJson: String, cfg: AzureConfig, portfolioJson: String? = null): Result<String> =
+        requestJson(cfg, skillPrompt(), userPrompt(reportJson, portfolioJson))
 
     /**
      * 심층 분석(P3)용 — 도구를 쥔 멀티턴 에이전트 루프.
@@ -362,13 +367,28 @@ class Interpreter(private val ctx: Context) {
         }
     }
 
-    private fun userPrompt(reportJson: String): String = buildString {
+    private fun userPrompt(reportJson: String, portfolioJson: String? = null): String = buildString {
         appendLine("아래는 한 사용자의 스마트폰 사용 로그를 집계한 리포트입니다.")
         val memory = Memory.read(ctx)
         if (memory.isNotBlank()) {
             appendLine()
             appendLine("사용자 메모리 — 이전 분석들이 남긴 확인된 사실 (제안의 개인화에 참고):")
             appendLine(memory)
+        }
+        if (portfolioJson != null) {
+            appendLine()
+            appendLine("제안 포트폴리오 — 이전 분석들이 이미 만든 제안과 사용자의 반응 상태:")
+            appendLine("```json")
+            appendLine(portfolioJson)
+            appendLine("```")
+            appendLine("증분 규칙 — 이 분석은 백지가 아니라 이어쓰기입니다:")
+            appendLine("- 포트폴리오에 있는 것과 같은 (트리거, 액션) 제안을 다시 내지 마세요.")
+            appendLine("  그 자리는 이미 있습니다. proposals 에는 **새 후보만** 넣으세요.")
+            appendLine("- 기존 제안의 변형·개선(선택지 추가, 조건 부여, 파라미터 확장)은")
+            appendLine("  새 카드가 아니라 그 항목에 \"updateOf\": \"<기존 signature>\" 를 넣어")
+            appendLine("  내세요 — 그 카드가 상태·이력을 유지한 채 갱신됩니다.")
+            appendLine("- 데이터가 더는 지지하지 않는 감시 중(candidate) 제안은 retire")
+            appendLine("  목록에 signature 와 사유로 내세요.")
         }
         appendLine("시스템 프롬프트의 절차(지형도 → 품질 → 후보 발굴 → 맥락 판정 →")
         appendLine("교차 검증 → 제안 생성)를 그대로 따라 루틴 제안을 만드세요.")

@@ -83,6 +83,19 @@ interface UsageDao {
     @Query("DELETE FROM proposal WHERE signature = :sig")
     suspend fun deleteProposal(sig: String)
 
+    /**
+     * 제안의 파라미터가 진화해 시그니처가 바뀔 때(updateOf) 결정 이력을
+     * 새 시그니처로 이관한다 — 이력이 끊기면 심층 분석이 그 제안의
+     * 과거를 잃는다.
+     */
+    // 파라미터명이 생성 Java 코드에 그대로 들어가므로 new/old 같은 예약어는 못 쓴다.
+    @Query("UPDATE proposal_event SET proposalSignature = :newSig WHERE proposalSignature = :oldSig")
+    suspend fun migrateProposalEvents(oldSig: String, newSig: String)
+
+    /** 같은 이유로 실험의 참조도 함께 이관 — 끊기면 만료 롤백이 허공을 친다. */
+    @Query("UPDATE experiment SET proposalSignature = :newSig WHERE proposalSignature = :oldSig")
+    suspend fun migrateExperiments(oldSig: String, newSig: String)
+
     @Query("DELETE FROM proposal")
     suspend fun clearProposals()
 
