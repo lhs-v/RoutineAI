@@ -79,40 +79,16 @@ class PatternAccessibilityService : AccessibilityService() {
         } ?: return false.also { Log.w(TAG, "분할 메뉴 없음") }
         if (!click(split)) return false
 
-        // 3) 앱 선택에서 상대 앱.
+        // 3) 여기까지다 — 앱 선택 화면을 열어두고 사용자에게 넘긴다.
         //
-        // 반드시 **앱 선택 창 안에서만** 찾아야 한다. 홈 화면과 태스크바에도
-        // 같은 앱 아이콘이 있어서, 활성 창만 보면 뒤에 깔린 홈 화면의 아이콘을
-        // 눌러 아무 일도 일어나지 않는다(실측: 실제 토스는 y817 인데 y2019 를
-        // 눌렀다). 목록에 없으면 한 번 스크롤해 본다.
-        var target = await { roots -> pickerRoot(roots)?.let { findVisible(it, otherLabel) } }
-        if (target == null) {
-            scrollOnce()
-            target = await { roots -> pickerRoot(roots)?.let { findVisible(it, otherLabel) } }
-        }
-        if (target == null) {
-            Log.w(TAG, "앱 선택에서 $otherLabel 못 찾음")
-            return false
-        }
-
-        // 여기는 ACTION_CLICK 이 통하지 않는다 — 삼성 앱 선택 그리드는 true 를
-        // 돌려주고도 아무 일도 하지 않았다(실측: split=true 인데 선택 안 됨).
-        // 사람 손가락과 같은 진짜 터치를 보낸다.
-        //
-        // 어디를 누르냐가 관건이다: 앱 이름 글자만 누르면 터치 영역 밖이라
-        // 아무 일도 안 일어난다(실측). 실제 대상은 아이콘과 이름을 함께 감싼
-        // 항목이므로, 누를 수 있는 조상의 한가운데부터 시도하고 안 되면
-        // 라벨 자신으로 물러난다.
-        for (rect in tapTargets(target)) {
-            Log.i(TAG, "탭: ${rect.centerX()},${rect.centerY()} (${rect.width()}x${rect.height()})")
-            if (!tapAt(rect)) continue
-            val gone = await(2_500L) { roots ->
-                if (pickerRoot(roots) == null) true else null
-            } ?: false
-            if (gone) return true
-        }
-        Log.w(TAG, "탭했지만 앱 선택 화면이 그대로다")
-        return false
+        // 두 번째 앱까지 자동으로 고르는 것은 포기했다(사용자 결정). 삼성
+        // 앱 선택 그리드는 ACTION_CLICK 에 true 를 돌려주고도 아무 일도 하지
+        // 않고, 좌표 탭도 안정적으로 먹지 않았다. 실패하면 순차 실행으로
+        // 낙하하는데 그게 "분할이 아니라 화면 전환"으로 보여 더 나빴다.
+        // 마지막 한 번의 탭은 사람이 하는 편이 정직하고 결과도 확실하다.
+        val pickerUp = await { roots -> if (pickerRoot(roots) != null) true else null } ?: false
+        Log.i(TAG, "분할 앱 선택 화면 열림=$pickerUp (상대 앱 $otherLabel 은 사용자가 선택)")
+        return pickerUp
     }
 
     /** 앱 선택 창의 루트. 홈 화면·태스크바와 구별하는 유일한 표식이 제목이다. */
@@ -129,53 +105,12 @@ class PatternAccessibilityService : AccessibilityService() {
         return out
     }
 
-    /**
-     * 누를 후보 좌표들 — 넓은 항목부터 좁은 라벨 순으로.
-     * 앱 목록은 아이콘 + 이름이 한 항목이라 이름만 누르면 빗나간다.
-     */
-    private fun tapTargets(node: AccessibilityNodeInfo): List<android.graphics.Rect> {
-        val out = ArrayList<android.graphics.Rect>()
-        var n: AccessibilityNodeInfo? = node
-        var depth = 0
-        while (n != null && depth++ < 4) {
-            if (n.isClickable) {
-                out += android.graphics.Rect().also { n!!.getBoundsInScreen(it) }
-                break
-            }
-            n = n.parent
-        }
-        // 조상을 못 찾았거나 그것으로도 안 될 때를 대비해 라벨 자신도 후보.
-        out += android.graphics.Rect().also { node.getBoundsInScreen(it) }
-        return out.filter { it.width() > 0 && it.height() > 0 }.distinct()
-    }
+    // 앱 선택 그리드를 자동으로 탭하던 코드(tapTargets/findVisible/tapAt/
+    // scrollOnce)는 제거했다 — 삼성 그리드가 ACTION_CLICK 에 true 를 주고도
+    // 아무 일도 안 하고 좌표 탭도 불안정해, 두 번째 앱은 사용자가 고르는
+    // 것으로 정했다(사용자 결정). 되살리려면 이 커밋의 부모를 보라.
 
-    /**
-     * 화면에 실제로 보이는 것 중에서 찾는다 — 접힌 목록의 노드를 눌러도 소용없다.
-     * 앱 아이콘은 눌리는 컨테이너에 content-desc 로, 그 안 글자에 text 로 이름이
-     * 붙어 있어(실측) 둘 다 본다.
-     */
-    private fun findVisible(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? =
-        find(root) { n ->
-            (n.contentDescription?.toString() == label && n.isClickable) && n.isVisibleToUser
-        } ?: find(root) { n ->
-            n.text?.toString() == label && n.isVisibleToUser &&
-                android.graphics.Rect().also { n.getBoundsInScreen(it) }.width() > 0
-        }
-
-    /** 그 자리를 실제로 터치한다. */
-    private fun tapAt(r: android.graphics.Rect): Boolean {
-        val path = android.graphics.Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
-        val gesture = android.accessibilityservice.GestureDescription.Builder()
-            .addStroke(
-                android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 80)
-            )
-            .build()
-        val ok = dispatchGesture(gesture, null, null)
-        Thread.sleep(400)
-        return ok
-    }
-
-    /** 자동화가 실패했을 때 앱 선택 화면에 사용자를 버려두지 않는다. */
+    /** 분할 진입 자체가 실패했을 때 앱 선택 화면에 사용자를 버려두지 않는다. */
     private fun leavePickerIfOpen() {
         val open = pickerRoot(roots()) != null
         if (open) {
@@ -209,15 +144,6 @@ class PatternAccessibilityService : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
-    private fun scrollOnce() {
-        // 앱 선택 창 안에서만 스크롤한다 — 홈 화면을 넘기면 소용없다.
-        pickerRoot(roots())?.let { root ->
-            find(root) { it.isScrollable }?.performAction(
-                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-            )
-        }
-        Thread.sleep(400)
-    }
 
     /** 트리를 훑어 조건에 맞는 첫 노드. */
     private fun find(
