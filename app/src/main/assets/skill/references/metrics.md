@@ -51,6 +51,16 @@ notif_cleanup 의 원천. 앱 이름이 성격을 말한다 — 시스템·연�
 루틴 앱)은 사람이 응답할 일이 없는 알림이다. / notifByApp(리스너 도착)과 정의·
 커버리지가 다르다. 건수보다 "누가 보내는가"가 중요.
 
+**notifResponse** — 발신 앱별 알림 응답 행동: 어떻게 사라졌는가.
+clickPct(눌러서 열었다 = 응답 가치) · swipePct(개별 스와이프 = 보고 무시) ·
+clearAllPct(모두 지우기에 쓸림 = 쌓아놓는 무관심) · appCancelPct(앱 자체
+취소 = 앱 안에서 처리) · medianShelfMinutes(방치 중앙값).
+notif_cleanup 의 **가장 강한 근거** — 건수는 양이지만 이건 행동이다.
+클릭률 낮고 스와이프·몰아 지우기가 높으면 행동으로 증명된 무응답 알림.
+/ 반대 방향도 성립: clickPct 가 높으면 건수가 많아도 끄면 안 된다.
+/ 수집 시작(v10) 이후만 쌓여 관측 창이 다른 지표보다 짧을 수 있다 —
+removed 표본 수를 함께 보라.
+
 **health** — Health Connect 세션(수면·운동) 종류별 요약: sessions ·
 meanMinutes · lastStart(동기화 생존 증거) · topHours(시작 시간대 상위 —
 "언제 하는 운동인가"). / 운동 직후의 앱은 eventChains(운동 시작/종료

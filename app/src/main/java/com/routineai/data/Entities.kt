@@ -26,7 +26,13 @@ data class UsageEventRow(
     val cls: String? = null,
 )
 
-/** 알림 도착 기록. NotificationListenerService 가 실시간으로 채운다. */
+/**
+ * 알림 도착·제거 기록. NotificationListenerService 가 실시간으로 채운다.
+ *
+ * 도착(posted)만으로는 양밖에 못 본다 — 응답 가치는 **어떻게 사라졌는가**에
+ * 있다. 눌러서 열었나(클릭), 보고 지웠나(스와이프), 쌓아놓고 몰아 지웠나
+ * (모두 지우기). 그 갈림이 notif_cleanup 의 행동적 근거다.
+ */
 @Entity(tableName = "notif_event", indices = [Index(value = ["ts"])])
 data class NotifEventRow(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -36,6 +42,20 @@ data class NotifEventRow(
     /** 소리·진동·헤드업으로 사용자를 실제로 방해했는지 */
     val interruptive: Boolean,
     val ongoing: Boolean,
+
+    /** "posted" | "removed" */
+    @ColumnInfo(defaultValue = "posted")
+    val kind: String = "posted",
+    /**
+     * kind=removed 의 사유 — NotificationListenerService.REASON_*.
+     * 1=클릭(반응) · 2=스와이프(반응 없이 제거) · 3=모두 지우기 ·
+     * 8/9=앱 자체 취소(앱 안에서 처리됨). 그 외 시스템 사유는 기록하지 않는다.
+     */
+    @ColumnInfo(defaultValue = "-1")
+    val reason: Int = -1,
+    /** kind=removed 에서 도착부터 제거까지 방치된 시간(ms) */
+    @ColumnInfo(defaultValue = "-1")
+    val dwellMs: Long = -1,
 )
 
 /**

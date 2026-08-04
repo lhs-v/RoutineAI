@@ -39,6 +39,13 @@ data class Report(
      * 정기·시스템성 알림과 사람이 응답해야 하는 알림을 구분할 수 있다.
      */
     val notifByAppInterrupt: List<CountStat>,
+    /**
+     * 발신 앱별 알림 응답 행동 — 어떻게 사라졌는가. 위 두 지표가 양이라면
+     * 이것이 행동이다: 클릭률이 낮고 스와이프·몰아 지우기가 높으면 사람이
+     * 응답할 일 없는 알림이라는 행동적 증명. 제거 5건 이상인 앱만.
+     * (v10 부터 수집 — 이전 구간에는 비어 있다.)
+     */
+    val notifResponse: List<NotifResponseStat> = emptyList(),
     /** 화면을 끄기 직전 마지막으로 쓴 앱. [firstApps] 의 반대쪽 끝. */
     val lastApps: List<CountStat>,
     /** 아침(05~09시) 세션에서 처음 연 앱. 하루의 진입점을 보기 위한 것. */
@@ -178,6 +185,24 @@ data class NightHabitStat(
     val lateNightMinutesPerNight: Double,
     /** 수면 추정이 있는 관측 밤 수 */
     val nightsObserved: Int,
+)
+
+/** [Report.notifResponse] 의 행. 비율(%)은 그 앱의 제거 전체 대비. */
+@Serializable
+data class NotifResponseStat(
+    val app: String,
+    /** 관측 창 안의 제거 기록 수 */
+    val removed: Int,
+    /** 눌러서 열었다 — 응답 가치의 증거 */
+    val clickPct: Double,
+    /** 개별 스와이프로 지웠다 — 보고 무시 */
+    val swipePct: Double,
+    /** "모두 지우기"에 쓸려 나갔다 — 쌓아놓는 무관심 */
+    val clearAllPct: Double,
+    /** 앱이 스스로 지웠다 — 대개 앱 안에서 그 내용을 처리했다는 간접 신호 */
+    val appCancelPct: Double,
+    /** 도착부터 제거까지 방치 중앙값(분) */
+    val medianShelfMinutes: Int,
 )
 
 /** Health Connect 세션 종류별 요약. kind: "sleep" | "exercise:걷기" */

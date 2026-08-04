@@ -53,7 +53,12 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         val from = maxOf(requested, dao.firstEventTs() ?: requested)
 
         val raw = dao.events(from, now)
-        val notifs = dao.notifs(from, now)
+        // v10 부터 notif_event 에 제거(removed) 행이 섞인다 — 도착 통계·알림
+        // 주도 실행 판정은 도착(posted)만 봐야 한다. 제거 행은 응답 행동
+        // 집계(notifResponse)가 따로 쓴다.
+        val allNotifRows = dao.notifs(from, now)
+        val notifs = allNotifRows.filter { it.kind == "posted" }
+        val notifRemovals = allNotifRows.filter { it.kind == "removed" }
         val netChanges = dao.netChanges(from, now)
         val btEvents = dao.btEvents(from, now)
         val healthSessions = dao.healthSessions(from, now)
@@ -312,6 +317,27 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             .sortedByDescending { it.value }.take(10)
             .map { CountStat(label(it.key), (it.value.toDouble() / sysInterruptDays).r2()) }
 
+        // 응답 행동 — 어떻게 사라졌는가. 양(위 두 지표)이 아니라 이것이
+        // notif_cleanup 의 행동적 근거다. 표본이 적으면 비율이 요동치므로
+        // 제거 5건 이상인 앱만 싣는다.
+        val notifResponse = notifRemovals.groupBy { it.pkg }.entries
+            .filter { it.value.size >= 5 }
+            .sortedByDescending { it.value.size }.take(12)
+            .map { (pkg, rows) ->
+                val n = rows.size
+                fun pct(reason: Int) = (rows.count { it.reason == reason } * 100.0 / n).r2()
+                val shelf = rows.map { it.dwellMs.toDouble() }.sorted()
+                NotifResponseStat(
+                    app = label(pkg),
+                    removed = n,
+                    clickPct = pct(1),
+                    swipePct = pct(2),
+                    clearAllPct = pct(3),
+                    appCancelPct = ((rows.count { it.reason == 8 || it.reason == 9 }) * 100.0 / n).r2(),
+                    medianShelfMinutes = (shelf[shelf.size / 2] / 60_000.0).roundToInt(),
+                )
+            }
+
         // ---- 장소 ----
         val ssidAlias = ssidAliases(netChanges)
         val places = places(netChanges, ssidAlias, now)
@@ -427,6 +453,7 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             eventChains = eventChains, appContext = appContext,
             coUse = coUse, firstApps = first,
             notifByApp = notifByApp, notifByAppInterrupt = notifByAppInterrupt,
+            notifResponse = notifResponse,
             lastApps = lastApps, morningFirstApps = morningFirst,
             sessionAppCount = sessionAppCount,
             places = places, timeFixed = timeFixed, netApps = netApps,

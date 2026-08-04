@@ -78,7 +78,54 @@ class NotifListener : NotificationListenerService() {
         onNotificationPosted(sbn, null)
     }
 
+    /**
+     * 어떻게 사라졌는가 — 도착(양)이 아니라 여기(행동)에 응답 가치가 있다.
+     * 사용자 행동(클릭·스와이프·모두 지우기)과 앱 자체 취소만 남기고,
+     * 그룹 요약 정리·타임아웃 같은 시스템 사유는 버린다.
+     * 방치 시간은 sbn.postTime 이 그대로 있어 그 자리에서 계산한다 —
+     * key 를 저장해 짝지을 필요가 없다.
+     */
+    override fun onNotificationRemoved(
+        sbn: StatusBarNotification,
+        rankingMap: RankingMap?,
+        reason: Int,
+    ) {
+        val n = sbn.notification ?: return
+        if (n.category == Notification.CATEGORY_TRANSPORT) return
+        if ((n.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
+        if (reason !in RECORDED_REASONS) return
+
+        val now = System.currentTimeMillis()
+        val row = NotifEventRow(
+            ts = now,
+            pkg = sbn.packageName,
+            channel = n.channelId,
+            interruptive = false,
+            ongoing = false,
+            kind = "removed",
+            reason = reason,
+            dwellMs = (now - sbn.postTime).coerceAtLeast(0),
+        )
+        scope.launch {
+            Db.get(applicationContext).dao().insertNotif(row)
+            // 스와이프·모두 지우기는 트리거이기도 하다 — 알림을 지우는 행동이
+            // 일어난 그 순간이 "이 알림, 끌까요?"의 증명 순간이다. 모두
+            // 지우기는 알림마다 이 콜백이 따로 오지만, 같은 앱은 신호 관문
+            // (5초)이 접고 발화 자체는 기존 쿨다운이 관리한다.
+            if (reason == REASON_CANCEL || reason == REASON_CANCEL_ALL) {
+                com.routineai.watch.PatternWatcher
+                    .onNotifDismissed(applicationContext, sbn.packageName)
+            }
+        }
+    }
+
     companion object {
         private const val REPOST_WINDOW_MS = 5_000L
+
+        /** 클릭 · 스와이프 · 모두 지우기 · 앱 자체 취소(단건/전체) */
+        private val RECORDED_REASONS = setOf(
+            REASON_CLICK, REASON_CANCEL, REASON_CANCEL_ALL,
+            REASON_APP_CANCEL, REASON_APP_CANCEL_ALL,
+        )
     }
 }

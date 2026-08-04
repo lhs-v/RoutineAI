@@ -285,7 +285,7 @@ class ProposalEngine(private val ctx: Context) {
         )
         val TRIGGER_TYPES = setOf(
             "bt_connect", "bt_disconnect", "wifi_connect", "wifi_disconnect",
-            "app_launch", "time", "exercise_start"
+            "app_launch", "time", "exercise_start", "notif_dismissed"
         )
         val ACTION_TYPES = setOf(
             "launch_app", "app_pair", "mode_rotation", "mode_eye_comfort",

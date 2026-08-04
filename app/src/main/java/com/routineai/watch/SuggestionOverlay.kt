@@ -381,6 +381,7 @@ object SuggestionOverlay {
     private fun triggerLabel(p: ProposalRow): String = when (p.triggerType) {
         "bt_connect" -> "${p.triggerParam ?: "기기"} 연결됨"
         "wifi_connect" -> "${p.triggerParam ?: "Wi-Fi"} 연결됨"
+        "notif_dismissed" -> "알림 정리 감지됨"
         else -> "패턴 감지됨"
     }
 

@@ -9,7 +9,7 @@
 | `trigger_routine` | 조건 발생 시 앱 실행 | eventChains: 횟수≥3 · 반복≥3일 · 중앙 gap≤60초 | 트리거가 그 앱의 목적을 시작시킨다. 같은 트리거에 여러 앱이면 **조건부 비율(appContext) 기울기 순**으로 — 횟수 아님. 1위를 params 첫째로 하고, **2위도 기울기가 뚜렷하면(비율 ≥ 25% 또는 1위의 1/3 이상) params 둘째로 함께** 넣는다 — 팝업이 선택지 두 개로 보여준다. 억지로 채우지 말고, 셋 이상은 넣지 않는다 |
 | `app_pair` | 두 앱을 분할화면 세트로 | appPairs: 왕복≥10 이고 (갈아타기 중앙≤10초 또는 왕복 주기 중앙≤60초), 또는 coUseCount≥3 | 두 앱의 목적이 하나의 활동으로 이어진다 — 판별은 이 서사가 한다. 통계 쪽 근거는 **switchLongPct**: 15%+ 면 홈에서 딴 일을 보는 병행이라 서사가 성립하기 어렵고, 0~5%는 필요조건일 뿐이다(거의 모든 홈 경유가 원래 1~5초라 짧다는 것 자체는 증거가 아니다). **viaLauncherPct 높음·coUseCount 0 은 제외 근거가 아니다** — 분할화면 없이 홈으로 오가는 형태는 이 제안이 제거하려는 마찰 그 자체이고, coUse≥3 은 대안 입장로일 뿐이다. 제외하려면 서사(목적이 한 활동으로 이어지지 않음)로 제외한다 |
 | `app_mode` | 앱 실행 중에만 기기 설정 변경(종료 시 원복) | apps: 사용일≥관측일 60% 이상인 앱 + **nightHabit**: preSleepSharePct 가 높고 preSleepNights ≥ 관측 밤 50% (수면 직전을 그 앱이 차지한다는 수치 근거) | 그 앱을 쓰는 동안 이 설정이 나은 이유 — 심야 시청이면 편안하게 보기·방해 금지, 영상·가로 콘텐츠면 회전 잠금 해제 |
-| `notif_cleanup` | 시스템성 다량 알림 끄기 | notifByAppInterrupt: ≥20건/일 | 사람이 응답할 일이 없는 알림이다 |
+| `notif_cleanup` | 시스템성 다량 알림 끄기 | notifByAppInterrupt: ≥20건/일, **또는 notifResponse: removed≥10 이고 clickPct≤5%** | 사람이 응답할 일이 없는 알림이다 — 양보다 행동이 강한 근거다: notifResponse 의 클릭률이 낮고 스와이프·몰아 지우기가 높으면 행동으로 증명된 것. 반대로 **clickPct 가 높으면 건수가 많아도 제안하지 마라**(응답하는 알림이다) |
 | `time_shortcut` | 고정 시각 습관의 진입 마찰 제거 | timeFixed: daysHit ≥ 관측일 70% | 그 시각의 실행이 의도적 습관이다 |
 
 app_mode 는 행동 로그(회전·밝기 조작)를 수집하지 않으므로 confidence 상한이
@@ -71,7 +71,10 @@ conditionHours/conditionWeekdays 는 팝업이 뜨는 창을 실제로 제한한
 
 `bt_connect` `bt_disconnect` (param=기기 이름) · `wifi_connect` `wifi_disconnect`
 (param=SSID 별칭) · `app_launch` (param=패키지명) · `time` (param="HH:mm") ·
-`exercise_start` (param=운동 이름)
+`exercise_start` (param=운동 이름) · `notif_dismissed` (param=패키지명 —
+그 앱의 알림을 스와이프·모두 지우기로 지운 순간. **notif_cleanup 은 이
+트리거를 쓴다** — 지우는 행동이 일어난 순간이 제안의 증명 순간이다.
+app_launch:시스템앱 같은 트리거는 감지 목록에서 제외되어 영원히 안 뜬다)
 
 ### action.type 허용 목록
 

@@ -246,6 +246,13 @@ object PatternWatcher {
         }
     }
 
+    /** 알림을 스와이프·모두 지우기로 지운 순간 — notif_cleanup 의 증명 순간 */
+    suspend fun onNotifDismissed(ctx: Context, pkg: String) {
+        gate.withLock {
+            signal(ctx, "notif_dismissed", pkg) { it.triggerParam == pkg }
+        }
+    }
+
     // ------------------------------------------------------------------
 
     /**
