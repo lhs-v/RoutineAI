@@ -330,10 +330,17 @@ def synth_bt():
     rng = random.Random(42)
     MUSIC = "com.google.android.apps.youtube.music"
     TUBE = "com.google.android.youtube"
-    NAME = "Galaxy Buds3 Pro"
     BOUT_GAP = 45 * 60 * 1000
 
     con = sqlite3.connect(ASSET)
+    # 합성 기기 이름은 실측(백필)에서 가장 자주 보인 버즈의 본딩 실명을 쓴다.
+    # 앱의 BT 트리거는 이름 정확 일치라, 데모 분석이 만든 제안이 실기기에서
+    # 발화하려면 이름이 실명과 같아야 한다. 개인 이름을 저장소에 넣지 않기
+    # 위해 상수가 아니라 DB 에서 읽는다 — 실측이 없으면 일반명으로 낙하.
+    _row = con.execute(
+        "SELECT name, COUNT(*) c FROM bt_event WHERE majorClass != -1 "
+        "AND name LIKE '%Buds%' GROUP BY name ORDER BY c DESC LIMIT 1").fetchone()
+    NAME = _row[0] if _row else "Galaxy Buds3 Pro"
     real_days = {kst(ts).date() for (ts,) in
                  con.execute("SELECT ts FROM bt_event WHERE majorClass != -1")}
     # 연쇄는 "연결 뒤 처음 연 앱"과 짝지어지므로, 연결과 앵커 앱 사이에
