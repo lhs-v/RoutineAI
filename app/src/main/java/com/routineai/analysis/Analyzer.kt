@@ -411,12 +411,16 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
             days = dayStats, hourly = hourly, apps = apps.take(20), sleep = sleep,
             nightHabit = nightHabit(sessions, launcher, system),
             health = healthSessions.groupBy { it.kind }.map { (k, list) ->
+                val hourCount = IntArray(24)
+                list.forEach { hourCount[it.tsStart.toLocalDateTime().hour]++ }
                 HealthStat(
                     kind = k,
                     sessions = list.size,
                     meanMinutes = list.map { (it.tsEnd - it.tsStart) / 60_000.0 }
                         .average().r2(),
                     lastStart = list.maxOf { it.tsStart },
+                    topHours = hourCount.withIndex().sortedByDescending { it.value }
+                        .take(3).filter { it.value > 0 }.map { it.index },
                 )
             }.sortedByDescending { it.sessions },
             transitions = transitions, appPairs = appPairs,
@@ -747,6 +751,10 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
     private fun systemPackages(): Set<String> = setOf(
         "android", "com.android.systemui", "com.android.intentresolver",
         "com.android.permissioncontroller", "com.google.android.permissioncontroller",
+        // 버즈 연결 순간 삼성이 자동으로 띄우는 연결 팝업. 사용자가 연 앱이
+        // 아닌데 "BT연결 → 첫 앱" 자리를 차지해 진짜 직후 행동(뮤직)을
+        // 연쇄에서 가렸다(실측: connect→easysetup 4회).
+        "com.samsung.android.easysetup",
     ) + runCatching {
         pm.getInstalledApplications(0)
             .filter { it.packageName.contains("inputmethod") || it.packageName.contains("honeyboard") }

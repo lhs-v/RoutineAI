@@ -95,6 +95,8 @@ object Chains {
     ): Pair<List<ChainStat>, Set<String>> {
         val gaps = HashMap<Pair<String, String>, MutableList<Long>>()
         val days = HashMap<Pair<String, String>, MutableSet<LocalDate>>()
+        val hours = HashMap<Pair<String, String>, MutableList<Int>>()
+        val resumed = HashMap<Pair<String, String>, Int>()
         var li = 0
         for ((ts, trig) in triggers(input)) {
             while (li < launches.size && launches[li].ts <= ts) li++
@@ -105,6 +107,13 @@ object Chains {
             gaps.getOrPut(key) { ArrayList() }.add(gap)
             days.getOrPut(key) { HashSet() }
                 .add(Instant.ofEpochMilli(ts).atZone(input.zone).toLocalDate())
+            hours.getOrPut(key) { ArrayList() }
+                .add(Instant.ofEpochMilli(ts).atZone(input.zone).hour)
+            // 트리거 직전 전면 앱이 같은 앱이면 "새로 연" 게 아니라 하던
+            // 행동의 재보고(화면 켬 등)일 수 있다 — 비율로 실어 해석에 맡긴다.
+            if (li > 0 && launches[li - 1].pkg == next.pkg) {
+                resumed.merge(key, 1, Int::plus)
+            }
         }
         val kept = gaps.entries
             .filter { it.value.size >= 3 }
@@ -112,6 +121,8 @@ object Chains {
             .take(15)
         val stats = kept.map { (key, g) ->
             val s = g.sorted()
+            val hourCount = IntArray(24)
+            hours[key]?.forEach { hourCount[it]++ }
             ChainStat(
                 trigger = key.first,
                 app = label(key.second),
@@ -120,6 +131,9 @@ object Chains {
                 medianGapSeconds = (s[s.size / 2] / 1000.0).roundToInt(),
                 maxGapSeconds = (s.last() / 1000.0).roundToInt(),
                 distinctDays = days[key]?.size ?: 0,
+                resumedPct = ((resumed[key] ?: 0) * 100.0 / g.size).r2(),
+                topHours = hourCount.withIndex().sortedByDescending { it.value }
+                    .take(3).filter { it.value > 0 }.map { it.index },
             )
         }
         return stats to kept.map { it.key.second }.toSet()

@@ -45,6 +45,8 @@ class WatchService : Service() {
     private var btInitialized = false
     /** "wifi:<SSID>" | "cellular" | "none". null 이면 아직 첫 폴링 전 */
     private var netState: String? = null
+    /** 마지막 Wi-Fi 이탈 (state 문자열, 시각) — 짧은 재접속을 재진입으로 안 치기 위해 */
+    private var lastWifiDrop: Pair<String, Long>? = null
     private var lastMinute: String? = null
     private var lastExercisePoll = 0L
     private val firedExercise = HashSet<Long>()
@@ -173,6 +175,10 @@ class WatchService : Service() {
             else -> "other"
         }
         val ssid = if (kind == "wifi") NetworkCollector(applicationContext).currentSsid() else null
+        // wifi 인 채 SSID 만 null 이 되는 것은 재협상 순간의 판독 실패지 다른
+        // 네트워크가 아니다 — 상태 변화로 치면 "연결→?→연결" 트리거가 분
+        // 단위로 반복된다(실측 8/2). 직전이 wifi 면 상태를 유지한다.
+        if (kind == "wifi" && ssid == null && netState?.startsWith("wifi:") == true) return
         val state = if (kind == "wifi") "wifi:${ssid.orEmpty()}" else kind
 
         if (netState == null) { netState = state; return }   // 시작 상태는 트리거 아님
@@ -184,10 +190,21 @@ class WatchService : Service() {
         NetworkCollector(applicationContext).recordCurrentNetwork()
 
         if (state.startsWith("wifi:")) {
+            // 방금 떠났던 Wi-Fi 로의 빠른 복귀는 재진입이 아니라 핸드오버
+            // 낑김이다(실측: 10~19초 만에 복귀). 기록은 위에서 남겼고
+            // 트리거만 삼킨다.
+            val drop = lastWifiDrop
+            if (drop != null && drop.first == state &&
+                System.currentTimeMillis() - drop.second < WIFI_REJOIN_MS
+            ) {
+                Log.i(TAG, "Wi-Fi 재접속 접음(핸드오버): $state")
+                return
+            }
             val alias = wifiAlias(ssid)
             Log.i(TAG, "Wi-Fi 연결 감지: $alias")
             PatternWatcher.onNetwork(applicationContext, true, alias)
         } else if (prev.startsWith("wifi:")) {
+            lastWifiDrop = prev to System.currentTimeMillis()
             val alias = wifiAlias(prev.removePrefix("wifi:").ifBlank { null })
             Log.i(TAG, "Wi-Fi 해제 감지: $alias")
             PatternWatcher.onNetwork(applicationContext, false, alias)
@@ -315,6 +332,9 @@ class WatchService : Service() {
 
         /** 실험 만료는 분 단위면 충분하다. */
         private const val EXPERIMENT_POLL_MS = 60_000L
+
+        /** 이 시간 안에 같은 Wi-Fi 로 돌아오면 재진입이 아니라 핸드오버 낑김 */
+        private const val WIFI_REJOIN_MS = 3L * 60 * 1000
 
         private val IGNORED = setOf(
             "com.android.systemui", "android",

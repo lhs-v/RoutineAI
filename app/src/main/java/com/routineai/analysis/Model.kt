@@ -188,6 +188,8 @@ data class HealthStat(
     val meanMinutes: Double,
     /** 마지막 세션 시작 시각 — 동기화가 살아 있는지의 증거 */
     val lastStart: Long,
+    /** 세션이 몰리는 시작 시간대 상위 3 (0~23시) — "언제 하는 운동인가" */
+    val topHours: List<Int> = emptyList(),
 )
 
 @Serializable
@@ -218,6 +220,15 @@ data class ChainStat(
     val medianGapSeconds: Int,
     val maxGapSeconds: Int,
     val distinctDays: Int,
+    /**
+     * 트리거 직전에도 같은 앱이 전면이었던 비율. 연쇄가 세는 것은 "새로 연
+     * 앱"이 아니라 "전면에 온 이벤트"라, 하던 행동 중에 트리거가 일어난
+     * 경우(영상 보다 이어폰 해제)와 트리거가 행동을 시작시킨 경우를 이
+     * 값이 가른다 — 높으면 전자다.
+     */
+    val resumedPct: Double = -1.0,
+    /** 이 연쇄가 몰리는 시간대 상위 3 (0~23시) — "언제의 습관인가" */
+    val topHours: List<Int> = emptyList(),
 )
 
 /**

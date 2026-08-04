@@ -163,6 +163,9 @@ WAL·검증·커밋 금지까지 충돌 지점이 전부 거기 있다.
 | net 버킷이 fg/bg/tag 로 쪼개져 옴 | 합산 후 저장값과 max 병합 | `NetworkCollector` |
 | 단순 횟수가 사용 빈도에 오염됨 | 조건부 비율(기울기)로 판정 | `Chains` |
 | 앱 시간 합계 ≠ 화면 시간 | 검산해 `Quality.reconciliationDelta` 노출 | `Analyzer` |
+| BT 연결 순간 삼성 연결 팝업이 "직후 첫 앱"을 가림 | easysetup 을 시스템 목록으로 제외 | `Analyzer` |
+| Wi-Fi 재협상 순간 SSID null 이 전환으로 기록됨 | 직전이 wifi 면 무시(모름≠다른 네트워크) | `NetworkCollector` |
+| 이미 떠 있던 앱의 재보고가 "연 앱"으로 집계됨 | `resumedPct` 로 구분 노출, 판정은 LLM | `Chains` |
 
 ## 실측으로 확정한 플랫폼 한계
 

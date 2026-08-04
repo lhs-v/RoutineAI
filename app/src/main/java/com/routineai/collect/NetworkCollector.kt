@@ -116,6 +116,11 @@ class NetworkCollector(private val ctx: Context) {
 
         val prev = dao.lastNetChange()
         if (prev != null && prev.kind == kind && prev.ssid == ssid) return
+        // wifi 인 채 SSID 만 null 로 바뀌는 것은 다른 네트워크가 아니라 재협상
+        // (밴드 전환 등) 순간의 판독 실패다. 기록하면 "LHS→?→LHS" 왕복이
+        // 분 단위로 쌓인다(실측 8/2: 29행 중 대부분). 직전이 wifi 일 때만
+        // 거른다 — cellular→wifi(null) 는 이름 모르는 진짜 연결이라 남긴다.
+        if (kind == "wifi" && ssid == null && prev?.kind == "wifi") return
 
         dao.insertNetChange(
             NetworkChangeRow(ts = System.currentTimeMillis(), kind = kind, ssid = ssid)
