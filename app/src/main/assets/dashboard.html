@@ -229,9 +229,11 @@ window.renderReport=function(D){
       return `${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`};
     add(`<h2>수면·운동 세션 — Health Connect</h2><div class="card">
       <div class="scroll"><table><thead><tr><th>종류</th><th>세션</th>
-      <th>평균 길이</th><th>마지막</th></tr></thead><tbody>`+
+      <th>평균 길이</th><th>주로</th><th>마지막</th></tr></thead><tbody>`+
       D.health.map(h=>`<tr><td>${h.kind==="sleep"?"수면":"운동 · "+h.kind.replace("exercise:","")}</td>
-        <td>${h.sessions}회</td><td>${r1(h.meanMinutes)}분</td><td>${hd(h.lastStart)}</td></tr>`).join("")+
+        <td>${h.sessions}회</td><td>${r1(h.meanMinutes)}분</td>
+        <td>${(h.topHours||[]).length?(h.topHours.join("·")+"시"):"—"}</td>
+        <td>${hd(h.lastStart)}</td></tr>`).join("")+
       `</tbody></table></div>
       <p class="empty">워치가 삼성 헬스에 남긴 세션이 Health Connect 로 동기화된 것입니다.
       위의 "폰을 놓은 구간"과 달리 실제 수면·운동 기록입니다.</p></div>`);
@@ -291,12 +293,16 @@ window.renderReport=function(D){
   /* 이벤트 → 행동 연쇄. 루틴의 형태(조건→행동) 그대로라 자동화 후보의 원천이다. */
   if((D.eventChains||[]).length){
     add(`<h2>이벤트 → 행동 연쇄</h2><div class="card"><figure><div id="c_ch"></div>
-      <figcaption>비앱 이벤트(트리거) 직후 5분 안에 연 앱. 반복이 많고 간격이 짧고
-      여러 날에 걸칠수록 자동화 후보입니다. 오른쪽은 횟수 · 중앙 간격 · 반복일.</figcaption>
+      <figcaption>비앱 이벤트(트리거) 직후 5분 안에 전면에 온 앱. 반복이 많고 간격이 짧고
+      여러 날에 걸칠수록 자동화 후보입니다. 오른쪽은 횟수 · 중앙 간격 · 반복일 · 몰리는
+      시간대. "재개 N%"는 트리거 직전에도 그 앱이 전면이던 비율 — 높으면 하던 행동 중에
+      트리거가 일어난 것입니다.</figcaption>
     </figure></div>`);
     hbar($("c_ch"),D.eventChains.slice(0,10).map(c=>({
       k:c.trigger+" → "+c.app,v:c.count,
-      t:c.count+"회 · "+c.medianGapSeconds+"초 · "+c.distinctDays+"일"})),cs("--s3"),210,560);
+      t:c.count+"회 · "+c.medianGapSeconds+"초 · "+c.distinctDays+"일"
+        +((c.topHours||[]).length?" · "+c.topHours.join("·")+"시":"")
+        +(c.resumedPct>0?" · 재개 "+Math.round(c.resumedPct)+"%":"")})),cs("--s3"),210,560);
   }
 
   /* 앱의 상태 맥락 */
