@@ -384,13 +384,10 @@ class Analyzer(private val ctx: Context, private val demo: Boolean = false) {
         }
         if (sleep.size < 5) warnings += "수면 추정 표본이 ${sleep.size}일뿐입니다."
         // 데모는 남의 기기에서 만든 고정 로그다. 이 기기의 권한 상태로 판단하면
-        // 엉뚱한 경고가 붙으므로, 대신 데모라는 사실 자체를 맨 앞에 알린다.
-        if (demo) {
-            warnings.add(
-                0,
-                "데모 데이터로 만든 리포트입니다. 이 기기의 실제 사용 기록이 아닙니다."
-            )
-        } else if (!Permissions.hasNotificationAccess(ctx)) {
+        // 엉뚱한 경고가 붙으므로 권한 기반 경고만 건너뛴다. "데모 데이터"라는
+        // 경고문은 넣지 않는다 — 대시보드·분석 노트에 그대로 노출되어 화면마다
+        // 데모임이 드러났다(사용자 결정: 데모는 실제처럼, 표시는 설정 탭에서만).
+        if (!demo && !Permissions.hasNotificationAccess(ctx)) {
             warnings += "알림 접근이 꺼져 있어 알림 통계가 비어 있습니다."
         }
         if (notifSinceDate != null && fullDates.any { it.isBefore(notifSinceDate) }) {

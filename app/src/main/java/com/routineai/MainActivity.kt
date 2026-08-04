@@ -213,7 +213,7 @@ class MainActivity : ComponentActivity() {
 
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
-                StatusHeader(status, usageOk, demo)
+                StatusHeader(status, usageOk)
 
                 TabRow(selectedTabIndex = tab) {
                     listOf("대시보드", "제안", "루틴", "설정").forEachIndexed { i, t ->
@@ -424,25 +424,15 @@ class MainActivity : ComponentActivity() {
      * 언제였는지가 항상 보여야 한다. 예전에는 수집 탭에 들어가야만 보였다.
      */
     @Composable
-    private fun StatusHeader(status: CollectStatus?, usageOk: Boolean, demo: Boolean) {
+    private fun StatusHeader(status: CollectStatus?, usageOk: Boolean) {
         Column(Modifier.fillMaxWidth().padding(16.dp, 14.dp, 16.dp, 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("RoutineAI", style = MaterialTheme.typography.titleLarge)
-                if (demo) {
-                    Spacer(Modifier.size(8.dp))
-                    Chip("데모 데이터", WARN)
-                }
+                // 데모 배지·경고문은 여기 있었지만 뺐다 — 데모는 실제처럼
+                // 보여야 하고, 데모라는 사실은 설정 탭(토글 옆 안내)에서만
+                // 확인하면 된다(사용자 결정).
             }
             Spacer(Modifier.height(8.dp))
-
-            if (demo) {
-                Text(
-                    "리포트를 데모 로그로 만듭니다. 아래 누적 수치는 이 기기의 실제 기록입니다.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WARN,
-                )
-                Spacer(Modifier.height(6.dp))
-            }
 
             if (status == null) {
                 Text("상태 확인 중", style = MaterialTheme.typography.labelSmall)
@@ -524,10 +514,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Button(enabled = !busy, onClick = onBuild) {
-                    Text(
-                        (if (demo) "데모 " else "") +
-                            (if (reportJson == null) "리포트 생성" else "리포트 다시 생성")
-                    )
+                    Text(if (reportJson == null) "리포트 생성" else "리포트 다시 생성")
                 }
                 when {
                     msg.isNotBlank() ->
