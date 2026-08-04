@@ -474,6 +474,27 @@ if __name__ == "__main__":
 
     a = None if (args.no_pull and args.dump) else adb()
     if not args.no_pull:
+        # pull 은 에셋을 실 DB 복사본으로 통째 교체한다 — 이전 실행이 심어둔
+        # 합성(BT majorClass=-1 · 쇼핑 cls='synth')도 함께 사라진다. 실측:
+        # --synth-shopping 만 주고 돌렸다가 합성 BT 가 통째로 날아가 데모의
+        # "버즈 연결 → 뮤직" 연쇄가 사라졌다. 덮기 전에 흔적을 보고 해당
+        # 합성 플래그를 자동으로 켜서 이번 실행이 다시 심게 한다.
+        if os.path.exists(ASSET):
+            try:
+                _pre = sqlite3.connect(ASSET)
+                had_bt = _pre.execute(
+                    "SELECT 1 FROM bt_event WHERE majorClass = -1 LIMIT 1").fetchone()
+                had_shop = _pre.execute(
+                    "SELECT 1 FROM usage_event WHERE cls = 'synth' LIMIT 1").fetchone()
+                _pre.close()
+                if had_bt and not args.synth_bt:
+                    print("기존 에셋에 합성 BT 발견 — pull 이 덮으므로 --synth-bt 자동 활성")
+                    args.synth_bt = True
+                if had_shop and not args.synth_shopping:
+                    print("기존 에셋에 합성 쇼핑 로그 발견 — --synth-shopping 자동 활성")
+                    args.synth_shopping = True
+            except sqlite3.Error:
+                pass
         pull_db(a)
     # 덤프를 assets 안에 두면 APK 에 패키징된다. 반드시 밖에 둔다.
     dump_path = args.dump or os.path.join(tempfile.gettempdir(), "routineai-netstats.txt")
