@@ -104,6 +104,9 @@ object PatternWatcher {
     private val lastNearMiss = HashMap<String, Long>()
     private const val NEAR_MISS_GAP_MS = 30L * 60 * 1000
 
+    /** 같은 신호에서 순서에 밀린(가려진) 제안의 기록 스팸 방지 — near_miss 와 같은 간격 */
+    private val lastEclipsed = HashMap<String, Long>()
+
     /** 팝업 무반응 소멸 직후, 사용자가 스스로 여는 첫 앱을 기다린다 */
     private data class PendingIgnore(val signature: String, val at: Long)
     @Volatile private var pendingIgnore: PendingIgnore? = null
@@ -283,6 +286,11 @@ object PatternWatcher {
         val matched = dao.proposals().filter { it.triggerType == triggerType && paramMatches(it) }
         if (matched.isEmpty()) return
 
+        // 적격자를 먼저 모은다 — 우선순위는 수락 > 후보, 같은 급에서는
+        // proposals() 정렬(updatedAt 최신순)이다. 띄우는 것은 첫째 하나지만,
+        // 밀린 나머지도 기록해야 경쟁의 존재를 심층 분석이 볼 수 있다.
+        val eligible = ArrayList<ProposalRow>()
+
         // 1) 수락된 루틴 — 실행은 언제나 사용자의 탭이다. 후보와 같은 팝업으로
         //    매번 여쭤본다. P3 가 좁힌 조건 밖에서는 침묵하되, 침묵을 기록한다.
         for (p in matched.filter { it.state == "accepted" }) {
@@ -307,10 +315,7 @@ object PatternWatcher {
                 val partner = Applier.params(p).firstOrNull { it != param }
                 if (partner != null && now - (pkgLastSeen[partner] ?: 0L) < PAIR_FLOW_MS) continue
             }
-            if (canSurface(p, now)) {
-                surface(ctx, p, now, shortcut = false)
-                return
-            }
+            if (canSurface(p, now)) eligible += p
         }
 
         // 2) 후보 — 본 적 없는 맥락에서만 물어본다. 1차 분석이 조건을 붙였으면
@@ -320,8 +325,25 @@ object PatternWatcher {
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
             if (!canSurface(p, now)) continue
             if (rejectedHereBefore(dao, p, hereBucket)) continue
-            surface(ctx, p, now, shortcut = false)
-            return   // 한 번에 하나만 띄운다
+            eligible += p
+        }
+
+        val winner = eligible.firstOrNull() ?: return
+        surface(ctx, winner, now, shortcut = false)   // 한 번에 하나만 띄운다
+
+        // 가려짐 — 같은 신호에서 조건을 통과하고도 순서에 밀려 침묵한 제안.
+        // 이 기록이 없으면 "이 트리거에 경쟁이 있고 사용자는 늘 한쪽만 본다"는
+        // 사실을 심층 분석이 알 길이 없다. choice 에 이긴 제안의 시그니처를
+        // 남긴다 — 무엇에 밀렸는지가 곧 우선순위 재조정의 재료다.
+        for (p in eligible.drop(1)) {
+            if (now - (lastEclipsed[p.signature] ?: 0L) < NEAR_MISS_GAP_MS) continue
+            lastEclipsed[p.signature] = now
+            dao.logProposalEvent(
+                DecisionContext.capture(
+                    ctx, p.signature, "eclipsed", lastForegroundPkg, now,
+                    choice = winner.signature,
+                )
+            )
         }
     }
 

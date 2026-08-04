@@ -178,6 +178,8 @@ data class ProposalRow(
  * 상태 컬럼만으로는 "세 번 무시하고 네 번째에 수락" 같은 궤적을 잃는다.
  * 수락·거절의 궤적이 곧 의도의 ground truth 라 심층 분석(P3)의 입력이 된다.
  * kind: generated | updated | surfaced | accepted | not_now | dismissed | revived
+ *   | near_miss(조건 밖 근접 발화) | eclipsed(같은 신호에서 다른 제안에 밀림,
+ *   choice=이긴 시그니처) | outcome | ignored_then | refined | retired | brief_* 등
  */
 @Entity(tableName = "proposal_event", indices = [Index(value = ["ts"])])
 data class ProposalEventRow(
