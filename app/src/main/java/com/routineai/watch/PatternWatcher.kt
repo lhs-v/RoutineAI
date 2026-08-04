@@ -334,7 +334,19 @@ object PatternWatcher {
         // 2) 후보 — 본 적 없는 맥락에서만 물어본다. 1차 분석이 조건을 붙였으면
         //    후보도 그 조건 안에서만 뜬다("밤에"라고 제안해놓고 낮에 뜨면 안 된다).
         for (p in matched.filter { it.state !in setOf("accepted", "dismissed") }) {
-            if (!inCondition(p, here)) continue
+            if (!inCondition(p, here)) {
+                // 후보의 조건 밖 침묵도 기록한다. 예전에는 수락된 루틴만
+                // 남겨서, 1차 분석이 조건을 붙인 후보가 조건 밖에서 아무리
+                // 자주 지나가도 흔적이 없었다 — 사용자도 에이전트도 "조건이
+                // 너무 좁다"를 알 길이 없다(실측: 버즈 제안 7-14 조건).
+                if (now - (lastNearMiss[p.signature] ?: 0L) >= NEAR_MISS_GAP_MS) {
+                    lastNearMiss[p.signature] = now
+                    dao.logProposalEvent(
+                        DecisionContext.capture(ctx, p.signature, "near_miss", lastForegroundPkg, now)
+                    )
+                }
+                continue
+            }
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
             // 후보 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온
             // 그 순간이 "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은

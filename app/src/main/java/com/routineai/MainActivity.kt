@@ -783,6 +783,16 @@ class MainActivity : ComponentActivity() {
                 .getOrDefault(emptyList())
         }
         var expanded by remember { mutableStateOf(false) }
+        // 조건 밖에서 몇 번 지나갔나 — "조건이 너무 좁다"를 사용자가 스스로
+        // 알아채는 자리. 같은 기록을 심층 분석도 이력으로 읽는다.
+        var nearMiss by remember(p.signature) {
+            mutableStateOf<com.routineai.data.NearMissStat?>(null)
+        }
+        LaunchedEffect(p.signature, p.updatedAt) {
+            nearMiss = withContext(Dispatchers.IO) {
+                Db.get(ctx).dao().nearMissStat(p.signature)
+            }
+        }
         Card(Modifier.fillMaxWidth()) {
             Column(
                 Modifier.padding(14.dp).let { if (dimmed) it else it },
@@ -795,6 +805,30 @@ class MainActivity : ComponentActivity() {
                 }
                 Text(p.oneLine, fontWeight = FontWeight.SemiBold)
                 Text(p.narrative, style = MaterialTheme.typography.bodySmall)
+                // 언제 뜨는 제안인지. 이게 안 보이면 카드는 "언제든 뜬다"고
+                // 읽히는데 실제로는 조건 안에서만 뜬다(실측 신고).
+                condLabel(p)?.let {
+                    Text(
+                        "이 창에서만: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                com.routineai.watch.PatternWatcher.whyQuiet(ctx, p)?.let {
+                    Text(
+                        "지금은 조용: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WARN,
+                    )
+                }
+                nearMiss?.takeIf { it.cnt > 0 }?.let { nm ->
+                    Text(
+                        "조건 밖에서 ${nm.cnt}번 지나갔어요 (마지막 ${fmt(nm.lastTs)}) — " +
+                            "잦으면 조건이 좁다는 뜻입니다",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (evidence.isNotEmpty()) {
                         Text(

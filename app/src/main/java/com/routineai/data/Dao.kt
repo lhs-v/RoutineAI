@@ -105,6 +105,17 @@ interface UsageDao {
     @Query("DELETE FROM proposal_event")
     suspend fun clearProposalEvents()
 
+    /**
+     * 조건 밖에서 침묵한 횟수와 마지막 시각 — 카드에 "N번 지나갔어요"로
+     * 보여주기 위한 것. 조건이 너무 좁은지를 사용자가 스스로 알아채는 유일한
+     * 표면이다(에이전트는 같은 기록을 이력으로 읽는다).
+     */
+    @Query(
+        "SELECT COUNT(*) AS cnt, MAX(ts) AS lastTs FROM proposal_event " +
+            "WHERE kind = 'near_miss' AND proposalSignature = :sig"
+    )
+    suspend fun nearMissStat(sig: String): NearMissStat
+
     /** 최근 노출 이력 — 방해 예산이 얼마나 남았는지 보여주기 위한 것 */
     @Query("SELECT COUNT(*) FROM proposal_event WHERE kind = 'surfaced' AND ts > :since")
     suspend fun surfacedSince(since: Long): Int
@@ -171,3 +182,6 @@ interface UsageDao {
 
 /** [UsageDao.runStats] 의 행. Room 이 컬럼 별칭으로 채운다. */
 data class RunStat(val signature: String, val cnt: Int, val lastTs: Long)
+
+/** [UsageDao.nearMissStat] 의 행. 없으면 cnt=0, lastTs=0. */
+data class NearMissStat(val cnt: Int, val lastTs: Long)
