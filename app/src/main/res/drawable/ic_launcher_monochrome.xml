@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   테마 아이콘(안드로이드 13+)용 단색 레이어. 시스템이 색을 입히므로
-  알파만으로 형태를 만든다 — 발광 대신 크기 대비로 "지금의 점"을 살린다.
+  발광 대신 알파와 크기 대비만으로 "쌓이는 반복 → 지금"을 만든다.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -9,20 +9,18 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:pathData="M54,32 A22,22 0 1,1 53.9,32"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.8"
-        android:strokeAlpha="0.55"
-        android:strokeLineCap="round" />
-    <path
-        android:pathData="M73.05,65 m-2.7,0 a2.7,2.7 0 1,0 5.4,0 a2.7,2.7 0 1,0 -5.4,0"
+        android:pathData="M33,70 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0"
         android:fillColor="#FFFFFF"
-        android:fillAlpha="0.7" />
+        android:fillAlpha="0.4" />
     <path
-        android:pathData="M34.95,65 m-2.7,0 a2.7,2.7 0 1,0 5.4,0 a2.7,2.7 0 1,0 -5.4,0"
+        android:pathData="M47,62 m-4.2,0 a4.2,4.2 0 1,0 8.4,0 a4.2,4.2 0 1,0 -8.4,0"
         android:fillColor="#FFFFFF"
-        android:fillAlpha="0.45" />
+        android:fillAlpha="0.6" />
     <path
-        android:pathData="M54,32 m-7.4,0 a7.4,7.4 0 1,0 14.8,0 a7.4,7.4 0 1,0 -14.8,0"
+        android:pathData="M61,52 m-4.8,0 a4.8,4.8 0 1,0 9.6,0 a4.8,4.8 0 1,0 -9.6,0"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.8" />
+    <path
+        android:pathData="M75,40 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0"
         android:fillColor="#FFFFFF" />
 </vector>
