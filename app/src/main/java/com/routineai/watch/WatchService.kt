@@ -14,6 +14,7 @@ import android.util.Log
 import com.routineai.MainActivity
 import com.routineai.collect.NetworkCollector
 import com.routineai.collect.Permissions
+import com.routineai.data.BtEventRow
 import com.routineai.data.Db
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -137,12 +138,21 @@ class WatchService : Service() {
         val removed = btConnected - now
         btConnected = now
 
+        // 수집도 여기서 한다. 기록은 원래 BtReceiver 전담이었는데, 이 기기에서
+        // ACL 브로드캐스트가 한 번도 오지 않아(위 주석의 실측) 트리거는 폴링으로
+        // 살았지만 bt_event 는 영원히 비어 있었다 — 리포트의 BT 축이 백필 없이는
+        // 0 이던 원인. 리시버가 사는 기기에서는 몇 초 차 이중 기록이 생길 수
+        // 있으나, 연쇄 계산(연결→앱)에는 무해하다.
+        val dao = Db.get(applicationContext).dao()
+        val now2 = System.currentTimeMillis()
         for (name in added) {
             Log.i(TAG, "BT 연결 감지: $name")
+            dao.insertBt(BtEventRow(ts = now2, action = "connect", name = name, majorClass = 0))
             PatternWatcher.onBluetooth(applicationContext, true, name)
         }
         for (name in removed) {
             Log.i(TAG, "BT 해제 감지: $name")
+            dao.insertBt(BtEventRow(ts = now2, action = "disconnect", name = name, majorClass = 0))
             PatternWatcher.onBluetooth(applicationContext, false, name)
         }
     }
