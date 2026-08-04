@@ -407,6 +407,44 @@ object PatternWatcher {
     private fun canSurface(p: ProposalRow, now: Long): Boolean =
         now - (p.lastSurfacedAt ?: 0L) >= REPEAT_GAP_MS
 
+    /**
+     * 지금 이 순간 트리거가 오면 이 제안이 뜰 수 있는가 — 못 뜨면 왜.
+     * 루틴·제안 카드의 진단 표시용. 억제는 설계지만 안 보이면 고장으로
+     * 읽힌다(실측: 수락 직후 페어 흐름 억제를 "트리거가 안 온다"로 오해).
+     * dispatch 와 같은 검사를 읽기 전용으로 재현한다 — 락 없이 흘끗 보는
+     * 근사지만 표시용으로 충분하다. null 이면 억제 없음.
+     */
+    fun whyQuiet(ctx: Context, p: ProposalRow): String? {
+        if (p.state == "dismissed") return "보지 않기 상태 — 다시 뜨지 않습니다"
+        val now = System.currentTimeMillis()
+        val here = DecisionContext.capture(ctx, "", "probe", lastForegroundPkg, now)
+        if (!inCondition(p, here)) {
+            return buildString {
+                append("조건 밖 — ")
+                p.conditionWeekdays?.let { append("요일 $it ") }
+                p.conditionHours?.let { append("시간 $it ") }
+                append("창에서만 뜹니다")
+            }
+        }
+        if (p.actionType == "app_pair") {
+            val recentSeen = Applier.params(p)
+                .mapNotNull { pkgLastSeen[it] }.maxOrNull() ?: 0L
+            val inFlow = now - recentSeen < PAIR_FLOW_MS
+            if (p.state == "accepted" && inFlow) {
+                val left = ((PAIR_FLOW_MS - (now - recentSeen)) / 60_000L + 1)
+                return "페어를 방금 함께 쓴 것으로 보여 잠시 조용합니다 — 약 ${left}분 뒤부터 다시"
+            }
+            if (p.state != "accepted" && !inFlow) {
+                return "전환 대기 — 한쪽 앱을 쓰다 3분 안에 다른 쪽으로 건너간 순간에만 물어봅니다"
+            }
+        }
+        val sinceSurfaced = now - (p.lastSurfacedAt ?: 0L)
+        if (sinceSurfaced < REPEAT_GAP_MS) {
+            return "방금 떠서 재노출 대기 — ${(REPEAT_GAP_MS - sinceSurfaced) / 1000}초 뒤부터"
+        }
+        return null
+    }
+
     /** P3 가 조건을 좁혀두었으면 그 조건 밖에서는 뜨지 않는다 */
     private fun inCondition(p: ProposalRow, here: ProposalEventRow): Boolean =
         matchesSpec(p.conditionHours, here.hour, endInclusive = false, wrap = true) &&

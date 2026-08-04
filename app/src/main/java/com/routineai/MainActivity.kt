@@ -1177,6 +1177,14 @@ class MainActivity : ComponentActivity() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // 왜 지금 안 뜨는가 — 억제는 설계지만 안 보이면 고장으로 읽힌다.
+                com.routineai.watch.PatternWatcher.whyQuiet(ctx, p)?.let {
+                    Text(
+                        "지금은 조용: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WARN,
+                    )
+                }
                 // 심층 분석의 통찰 — "내 반응이 뭔가를 바꿨다"의 증거 자리.
                 p.insight?.let { insight ->
                     Row(Modifier.fillMaxWidth()) {
