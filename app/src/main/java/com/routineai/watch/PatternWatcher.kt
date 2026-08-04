@@ -188,7 +188,13 @@ object PatternWatcher {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
         }
         if (leaving.isNotEmpty()) persistModes(ctx)
-        if (lastForegroundPkg != pkg) foregroundSince = System.currentTimeMillis()
+        if (lastForegroundPkg != pkg) {
+            foregroundSince = System.currentTimeMillis()
+            // 떠나는 앱에도 도장을 찍는다 — "상대 앱을 3분 내 썼는가"(수락
+            // 페어의 흐름 억제, 후보 페어의 전환 게이트)를 입장 시각만으로
+            // 판정하면 긴 체류 끝의 전환을 놓친다.
+            lastForegroundPkg?.let { pkgLastSeen[it] = System.currentTimeMillis() }
+        }
         pkgLastSeen[pkg] = System.currentTimeMillis()
         lastForegroundPkg = pkg
 
@@ -323,6 +329,14 @@ object PatternWatcher {
         for (p in matched.filter { it.state !in setOf("accepted", "dismissed") }) {
             if (!inCondition(p, here)) continue
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
+            // 후보 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온
+            // 그 순간이 "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은
+            // 대부분 다른 용무라 소음이다. (수락 뒤에는 반대로 첫 실행에
+            // 묻는다 — 왕복이 시작되기 전에 없애는 것이 세트의 목적이라.)
+            if (p.actionType == "app_pair" && triggerType == "app_launch") {
+                val partner = Applier.params(p).firstOrNull { it != param }
+                if (partner == null || now - (pkgLastSeen[partner] ?: 0L) >= PAIR_FLOW_MS) continue
+            }
             if (!canSurface(p, now)) continue
             if (rejectedHereBefore(dao, p, hereBucket)) continue
             eligible += p
