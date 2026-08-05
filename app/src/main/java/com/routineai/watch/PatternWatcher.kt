@@ -110,8 +110,15 @@ object PatternWatcher {
     /** 이 시간 안의 재등장은 같은 방문의 연장으로 본다 — 종료 애니메이션·PIP 재보고 흡수 */
     private const val VISIT_REJOIN_MS = 15_000L
 
-    /** 현재 전면 앱이 "떠난 직후 되돌아온" 것인가 — gate 안에서만 읽고 쓴다 */
+    /** 현재 방문이 "떠난 직후 되돌아온" 것인가 — 방문이 끝날 때까지 유지된다 */
     private var reenteredRecently = false
+
+    /**
+     * 지금 처리 중인 보고가 방문을 연 보고인가. 앱 트리거(비페어)는 이때만
+     * 발화할 수 있다 — 방문 중의 재보고(새로고침·게시글 클릭 등 화면 상태
+     * 변화)가 진입 때 조용했던 제안을 뒤늦게 띄우면 안 된다(실측 신고).
+     */
+    private var visitOpening = false
 
     /** 팝업 무반응 소멸 직후, 사용자가 스스로 여는 첫 앱을 기다린다 */
     private data class PendingIgnore(val signature: String, val at: Long)
@@ -211,7 +218,12 @@ object PatternWatcher {
         // 새 방문으로 잡히면 방문 스코프가 리셋되어 "앱을 끌 때 같은 제안이
         // 또 뜨는" 증상이 된다(실측 신고). 페어는 예외 — 빠른 왕복 자체가
         // 관찰 대상이라 dispatch 의 페어 게이트가 따로 판단한다.
-        reenteredRecently = newVisit && prevSeen != null && nowTs - prevSeen < VISIT_REJOIN_MS
+        // 방문이 이어지는 동안(같은 앱 재보고)에는 갱신하지 않는다 — 매 보고마다
+        // 다시 계산하면 방문 중 첫 재보고에서 풀려 버린다(실측: 새로고침에 재발화).
+        if (newVisit) {
+            reenteredRecently = prevSeen != null && nowTs - prevSeen < VISIT_REJOIN_MS
+        }
+        visitOpening = newVisit
         pkgLastSeen[pkg] = nowTs
         lastForegroundPkg = pkg
 
@@ -338,8 +350,10 @@ object PatternWatcher {
             // 같은 방문에서 두 번 묻지 않는다 — 앱에 머무는 동안 접근성이
             // 화면 전환을 재보고해도 알약이 반복되면 안 된다(실측 신고).
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
-            // 떠난 직후의 재등장(종료 애니메이션·PIP)도 새 방문이 아니다.
-            if (triggerType == "app_launch" && p.actionType != "app_pair" && reenteredRecently) continue
+            // 비페어 앱 트리거는 방문을 연 보고에서만, 재진입 방문이 아닐 때만.
+            if (triggerType == "app_launch" && p.actionType != "app_pair" &&
+                (!visitOpening || reenteredRecently)
+            ) continue
             // 페어는 수락 뒤에도 후보와 같은 조건이다(사용자 결정으로 통일):
             // 한쪽을 쓰다 다른 쪽으로 건너간 전환 순간에만 묻는다. 단독
             // 실행은 대부분 다른 용무라 소음이다. 대신 같은 흐름 안에서
@@ -369,8 +383,10 @@ object PatternWatcher {
                 continue
             }
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
-            // 떠난 직후의 재등장(종료 애니메이션·PIP)도 새 방문이 아니다.
-            if (triggerType == "app_launch" && p.actionType != "app_pair" && reenteredRecently) continue
+            // 비페어 앱 트리거는 방문을 연 보고에서만, 재진입 방문이 아닐 때만.
+            if (triggerType == "app_launch" && p.actionType != "app_pair" &&
+                (!visitOpening || reenteredRecently)
+            ) continue
             // 후보 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온
             // 그 순간이 "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은
             // 대부분 다른 용무라 소음이다. (수락 뒤에는 반대로 첫 실행에
