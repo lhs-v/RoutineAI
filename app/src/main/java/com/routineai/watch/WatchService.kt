@@ -224,7 +224,11 @@ class WatchService : Service() {
     /** 분이 바뀌는 순간 시간 트리거를 확인한다. triggerParam 형식은 "HH:mm". */
     private suspend fun pollTime() {
         val t = java.time.LocalTime.now()
-        val hhmm = "%02d:%02d".format(t.hour, t.minute)
+        // 데모 시계가 켜져 있으면 '시'만 바꿔 본다 — 조건 판정(capture)과
+        // 같은 세계여야 시간 트리거 제안도 시연에서 함께 산다.
+        val demoHour = com.routineai.interpret.Settings(applicationContext)
+            .demoHour.takeIf { it in 0..23 }
+        val hhmm = "%02d:%02d".format(demoHour ?: t.hour, t.minute)
         if (hhmm == lastMinute) return
         val first = lastMinute == null
         lastMinute = hhmm

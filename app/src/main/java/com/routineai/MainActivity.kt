@@ -11,6 +11,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -212,7 +220,9 @@ class MainActivity : ComponentActivity() {
         var demo by remember { mutableStateOf(prefs.demoMode && demoAvailable) }
 
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
+            // statusBarsPadding: targetSdk 35 부터 엣지-투-엣지가 강제라 콘텐츠가
+            // 상태바·카메라 컷아웃 아래로 들어간다 — 인셋만큼 내려서 시작한다.
+            Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 StatusHeader(status, usageOk)
 
                 TabRow(selectedTabIndex = tab) {
@@ -353,6 +363,7 @@ class MainActivity : ComponentActivity() {
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
                             btOk = btOk, healthOk = healthOk, prefs = prefs,
                             overlayOk = overlayOk, a11yOk = a11yOk, writeOk = writeOk,
+                            status = status,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -418,48 +429,60 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     /**
-     * 상시 상태 바.
-     *
-     * 이 앱은 오래 쓸수록 값어치가 커지는 구조라, 지금 며칠치가 쌓였고 마지막 수집이
-     * 언제였는지가 항상 보여야 한다. 예전에는 수집 탭에 들어가야만 보였다.
+     * 앱 헤더 — 로고와 이름만. 수집 현황 칩은 설정 탭의 수집 섹션으로
+     * 옮겼다(사용자 결정: 리포트를 만들면 어차피 보이는 숫자라 상시 노출이
+     * 과했다). 문제 상태(기록 없음·권한 꺼짐)만 여기서 한 줄로 알린다 —
+     * 그건 어느 탭에 있든 알아야 하는 사실이라서다.
      */
     @Composable
     private fun StatusHeader(status: CollectStatus?, usageOk: Boolean) {
-        Column(Modifier.fillMaxWidth().padding(16.dp, 14.dp, 16.dp, 10.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp, 12.dp, 16.dp, 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("RoutineAI", style = MaterialTheme.typography.titleLarge)
-                // 데모 배지·경고문은 여기 있었지만 뺐다 — 데모는 실제처럼
-                // 보여야 하고, 데모라는 사실은 설정 탭(토글 옆 안내)에서만
-                // 확인하면 된다(사용자 결정).
+                LogoMark()
+                Spacer(Modifier.size(9.dp))
+                Text("Routine AI", style = MaterialTheme.typography.titleLarge)
             }
-            Spacer(Modifier.height(8.dp))
-
-            if (status == null) {
-                Text("상태 확인 중", style = MaterialTheme.typography.labelSmall)
-            } else if (status.storedEvents == 0) {
+            if (status != null && status.storedEvents == 0) {
+                Spacer(Modifier.height(6.dp))
                 Text(
                     if (usageOk) "아직 수집된 기록이 없습니다 — 설정 탭에서 '지금 수집'"
                     else "'사용 정보 접근'이 꺼져 있습니다 — 설정 탭에서 켜주세요",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (usageOk) WARN else NEED,
                 )
-            } else {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Chip("누적 ${status.storedEvents.formatted()}건")
-                    Chip("${status.spanDays}일치")
-                    status.oldestTs?.let { o ->
-                        status.newestTs?.let { n -> Chip("${fmtDay(o)} ~ ${fmtDay(n)}") }
-                    }
-                    Chip(
-                        status.lastCollectTs?.let { "수집 ${ago(it)}" } ?: "수집 기록 없음",
-                        if (status.lastCollectTs.isStale()) WARN else Color.Unspecified,
-                    )
-                    if (!usageOk) Chip("권한 꺼짐", NEED)
-                }
             }
+        }
+    }
+
+    /**
+     * 앱 로고 — 런처 아이콘과 같은 그림(쌓이는 점 → 지금). 마지막 점의
+     * 헤일로만 3초 주기로 천천히 숨쉰다 — 앱 안이라 시선을 끌면 안 되고,
+     * 팝업 가장자리 발광과 같은 "살아 있음"의 최소 신호만 남긴다.
+     */
+    @Composable
+    private fun LogoMark(size: androidx.compose.ui.unit.Dp = 30.dp) {
+        val breath by rememberInfiniteTransition(label = "logo").animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(3000, easing = FastOutSlowInEasing), RepeatMode.Reverse
+            ),
+            label = "breath",
+        )
+        Canvas(Modifier.size(size)) {
+            val w = this.size.width
+            fun p(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(
+                x / 108f * w, y / 108f * w
+            )
+            fun r(v: Float) = v / 108f * w
+            val teal = Color(0xFF0E7A58)
+            // 아이콘과 같은 좌표계 — 여백을 줄이려 살짝 확대해 중앙으로 당긴다.
+            drawCircle(teal.copy(alpha = .3f), r(4.4f), p(22f, 78f))
+            drawCircle(teal.copy(alpha = .48f), r(5.5f), p(41f, 67f))
+            drawCircle(teal.copy(alpha = .7f), r(6.3f), p(60f, 53f))
+            drawCircle(Color(0xFF12A074).copy(alpha = .15f * breath), r(17f), p(80f, 37f))
+            drawCircle(Color(0xFF12A074).copy(alpha = .3f * breath), r(11.5f), p(80f, 37f))
+            drawCircle(Color(0xFF0C7A57), r(7.7f), p(80f, 37f))
         }
     }
 
@@ -1293,7 +1316,11 @@ class MainActivity : ComponentActivity() {
             "bt_disconnect" -> "${p.triggerParam ?: "블루투스"} 끊기면"
             "wifi_connect" -> "${p.triggerParam ?: "Wi-Fi"} 연결되면"
             "wifi_disconnect" -> "Wi-Fi 끊기면"
-            "app_launch" -> "${appLabel(ctx, p.triggerParam)} 열면"
+            // 페어는 첫 실행이 아니라 두 앱을 오가는 전환 순간에 뜬다 —
+            // "열면"이라고 쓰면 단독 실행에도 뜰 것처럼 읽힌다(조건 통일).
+            "app_launch" ->
+                if (p.actionType == "app_pair") "두 앱을 오가면"
+                else "${appLabel(ctx, p.triggerParam)} 열면"
             "time" -> "${p.triggerParam ?: "정해진 시간"}에"
             "exercise_start" -> "운동을 시작하면"
             else -> p.triggerType
@@ -1359,6 +1386,7 @@ class MainActivity : ComponentActivity() {
         usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
         btOk: Boolean, healthOk: Boolean, busy: Boolean, prefs: Settings,
         overlayOk: Boolean, a11yOk: Boolean, writeOk: Boolean,
+        status: CollectStatus?,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
         onDemoChange: (Boolean) -> Unit, onCollect: () -> Unit,
@@ -1434,6 +1462,35 @@ class MainActivity : ComponentActivity() {
             ) { Text("데모: 증권 페어 루틴 + 일주일 결정 이력 심기") }
             if (seedMsg.isNotBlank()) {
                 Notice(OK, seedMsg)
+            }
+            // 데모 시계 — 시스템 시간이 아니라 앱이 보는 '시'만 바꾼다.
+            // 밤 조건(21-2 등) 제안을 낮 시연에서 발화시키기 위한 것.
+            var demoHour by remember { mutableStateOf(prefs.demoHour) }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("데모 시계", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (demoHour in 0..23)
+                            "앱이 지금을 ${demoHour}시로 봅니다 — 시간 조건·시간 트리거가 이 시각 기준으로 뜹니다. " +
+                                "리포트·실험 만료는 실제 시각을 씁니다."
+                        else
+                            "실제 시각을 씁니다. 밤 조건이 붙은 제안을 낮에 시연하려면 시각을 골라두세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(-1 to "실제", 9 to "09시", 15 to "15시", 22 to "22시").forEach { (h, label) ->
+                            val selected = demoHour == h || (h == -1 && demoHour !in 0..23)
+                            if (selected) {
+                                Button(onClick = {}, enabled = true) { Text(label) }
+                            } else {
+                                OutlinedButton(onClick = {
+                                    demoHour = h
+                                    prefs.demoHour = h
+                                }) { Text(label) }
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- 1. 권한 ----
@@ -1580,6 +1637,23 @@ class MainActivity : ComponentActivity() {
                 "안드로이드는 사용 이벤트를 며칠치만 보관하다 지웁니다. 이 앱은 주기적으로 " +
                     "읽어 자체 DB에 누적하므로, 오래 쓸수록 분석 가능한 기간이 길어집니다.",
             )
+            // 수집 현황 — 헤더에 상시 노출하던 칩을 여기로 옮겼다(사용자 결정).
+            if (status != null && status.storedEvents > 0) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Chip("누적 ${status.storedEvents.formatted()}건")
+                    Chip("${status.spanDays}일치")
+                    status.oldestTs?.let { o ->
+                        status.newestTs?.let { n -> Chip("${fmtDay(o)} ~ ${fmtDay(n)}") }
+                    }
+                    Chip(
+                        status.lastCollectTs?.let { "수집 ${ago(it)}" } ?: "수집 기록 없음",
+                        if (status.lastCollectTs.isStale()) WARN else Color.Unspecified,
+                    )
+                }
+            }
             Button(enabled = usageOk && !busy, onClick = onCollect) { Text("지금 수집") }
             if (collectMsg.isNotBlank()) {
                 Card(Modifier.fillMaxWidth()) {

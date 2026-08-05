@@ -31,11 +31,15 @@ object DecisionContext {
     ): ProposalEventRow {
         val t = Instant.ofEpochMilli(ts).atZone(zone)
         val (charging, batteryPct) = battery(ctx)
+        // 데모 시계 — 시연에서 시간 조건을 발화시키기 위해 '시'만 바꿔치기한다.
+        // 기록되는 결정 맥락에도 같은 시각이 남아야 시연 흐름(팝업 → 결정 →
+        // 심층 분석)이 한 세계로 일관된다. ts 는 실제 시각 그대로다.
+        val demoHour = com.routineai.interpret.Settings(ctx).demoHour
         return ProposalEventRow(
             ts = ts,
             proposalSignature = signature,
             kind = kind,
-            hour = t.hour,
+            hour = if (demoHour in 0..23) demoHour else t.hour,
             weekday = t.dayOfWeek.value,
             foregroundPkg = foregroundPkg,
             network = network(ctx),

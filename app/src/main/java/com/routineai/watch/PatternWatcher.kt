@@ -107,6 +107,12 @@ object PatternWatcher {
     /** 같은 신호에서 순서에 밀린(가려진) 제안의 기록 스팸 방지 — near_miss 와 같은 간격 */
     private val lastEclipsed = HashMap<String, Long>()
 
+    /** 이 시간 안의 재등장은 같은 방문의 연장으로 본다 — 종료 애니메이션·PIP 재보고 흡수 */
+    private const val VISIT_REJOIN_MS = 15_000L
+
+    /** 현재 전면 앱이 "떠난 직후 되돌아온" 것인가 — gate 안에서만 읽고 쓴다 */
+    private var reenteredRecently = false
+
     /** 팝업 무반응 소멸 직후, 사용자가 스스로 여는 첫 앱을 기다린다 */
     private data class PendingIgnore(val signature: String, val at: Long)
     @Volatile private var pendingIgnore: PendingIgnore? = null
@@ -188,14 +194,25 @@ object PatternWatcher {
             activeModes.remove(key)?.let { revertMode(ctx, it) }
         }
         if (leaving.isNotEmpty()) persistModes(ctx)
-        if (lastForegroundPkg != pkg) {
-            foregroundSince = System.currentTimeMillis()
+        val nowTs = System.currentTimeMillis()
+        // 도장을 찍기 전에 읽는다 — "이 앱을 마지막으로 본 게 언제였나"가
+        // 아래 재진입 판정의 재료다.
+        val prevSeen = pkgLastSeen[pkg]
+        val newVisit = lastForegroundPkg != pkg
+        if (newVisit) {
+            foregroundSince = nowTs
             // 떠나는 앱에도 도장을 찍는다 — "상대 앱을 3분 내 썼는가"(수락
             // 페어의 흐름 억제, 후보 페어의 전환 게이트)를 입장 시각만으로
             // 판정하면 긴 체류 끝의 전환을 놓친다.
-            lastForegroundPkg?.let { pkgLastSeen[it] = System.currentTimeMillis() }
+            lastForegroundPkg?.let { pkgLastSeen[it] = nowTs }
         }
-        pkgLastSeen[pkg] = System.currentTimeMillis()
+        // 떠난 직후의 재등장은 새 방문이 아니다. 앱을 끄는 과정(종료 애니메이션,
+        // PIP 전환)에서 시스템이 그 앱을 잠깐 다시 전면으로 보고하는데, 이게
+        // 새 방문으로 잡히면 방문 스코프가 리셋되어 "앱을 끌 때 같은 제안이
+        // 또 뜨는" 증상이 된다(실측 신고). 페어는 예외 — 빠른 왕복 자체가
+        // 관찰 대상이라 dispatch 의 페어 게이트가 따로 판단한다.
+        reenteredRecently = newVisit && prevSeen != null && nowTs - prevSeen < VISIT_REJOIN_MS
+        pkgLastSeen[pkg] = nowTs
         lastForegroundPkg = pkg
 
         // 실행 결과: 다른 앱으로 옮겨간 순간이 체류의 끝이다.
@@ -321,12 +338,16 @@ object PatternWatcher {
             // 같은 방문에서 두 번 묻지 않는다 — 앱에 머무는 동안 접근성이
             // 화면 전환을 재보고해도 알약이 반복되면 안 된다(실측 신고).
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
-            // 이미 페어를 함께 쓰는 중이면 제안이 무의미하다 — 방금 상대
-            // 앱을 쓰고 왔다면(번갈아 사용) 조용히 둔다. 후보에는 적용하지
-            // 않는다: 후보에게는 그 순간이 바로 "이 흐름 반복 중이죠?"다.
-            if (p.actionType == "app_pair") {
+            // 떠난 직후의 재등장(종료 애니메이션·PIP)도 새 방문이 아니다.
+            if (triggerType == "app_launch" && p.actionType != "app_pair" && reenteredRecently) continue
+            // 페어는 수락 뒤에도 후보와 같은 조건이다(사용자 결정으로 통일):
+            // 한쪽을 쓰다 다른 쪽으로 건너간 전환 순간에만 묻는다. 단독
+            // 실행은 대부분 다른 용무라 소음이다. 대신 같은 흐름 안에서
+            // 전환마다 반복하지 않는다 — "번갈아 쓸 때마다 알약"이 원 신고다.
+            if (p.actionType == "app_pair" && triggerType == "app_launch") {
                 val partner = Applier.params(p).firstOrNull { it != param }
-                if (partner != null && now - (pkgLastSeen[partner] ?: 0L) < PAIR_FLOW_MS) continue
+                if (partner == null || now - (pkgLastSeen[partner] ?: 0L) >= PAIR_FLOW_MS) continue
+                if (now - (p.lastSurfacedAt ?: 0L) < PAIR_FLOW_MS) continue
             }
             if (canSurface(p, now)) eligible += p
         }
@@ -348,6 +369,8 @@ object PatternWatcher {
                 continue
             }
             if (triggerType == "app_launch" && (p.lastSurfacedAt ?: 0L) >= foregroundSince) continue
+            // 떠난 직후의 재등장(종료 애니메이션·PIP)도 새 방문이 아니다.
+            if (triggerType == "app_launch" && p.actionType != "app_pair" && reenteredRecently) continue
             // 후보 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온
             // 그 순간이 "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은
             // 대부분 다른 용무라 소음이다. (수락 뒤에는 반대로 첫 실행에
@@ -439,15 +462,17 @@ object PatternWatcher {
             }
         }
         if (p.actionType == "app_pair") {
+            // 수락 여부와 무관하게 조건이 같다(통일): 전환 순간에만 묻고,
+            // 같은 흐름 안에서는 한 번만.
             val recentSeen = Applier.params(p)
                 .mapNotNull { pkgLastSeen[it] }.maxOrNull() ?: 0L
-            val inFlow = now - recentSeen < PAIR_FLOW_MS
-            if (p.state == "accepted" && inFlow) {
-                val left = ((PAIR_FLOW_MS - (now - recentSeen)) / 60_000L + 1)
-                return "페어를 방금 함께 쓴 것으로 보여 잠시 조용합니다 — 약 ${left}분 뒤부터 다시"
-            }
-            if (p.state != "accepted" && !inFlow) {
+            if (now - recentSeen >= PAIR_FLOW_MS) {
                 return "전환 대기 — 한쪽 앱을 쓰다 3분 안에 다른 쪽으로 건너간 순간에만 물어봅니다"
+            }
+            val sinceSurf = now - (p.lastSurfacedAt ?: 0L)
+            if (p.state == "accepted" && sinceSurf < PAIR_FLOW_MS) {
+                val left = (PAIR_FLOW_MS - sinceSurf) / 60_000L + 1
+                return "이 흐름에서는 이미 물어봤어요 — 약 ${left}분 뒤부터 다시"
             }
         }
         val sinceSurfaced = now - (p.lastSurfacedAt ?: 0L)

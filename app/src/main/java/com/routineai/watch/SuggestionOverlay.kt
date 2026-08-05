@@ -57,8 +57,17 @@ object SuggestionOverlay {
     /** 일렁임 전체 길이. 두 번의 숨 뒤 옅은 상시 발광으로 가라앉는다. */
     private const val GLOW_TOTAL_MS = 1_400L
 
-    /** 카드는 첫 숨이 지나 "알아챘다"가 전달된 뒤에 나온다. */
-    private const val CARD_DELAY_MS = 950L
+    /**
+     * 카드는 발광 진행도(phase)가 여기 닿으면 나온다 — 벽시계가 아니라
+     * **발광의 시계**다. 예전엔 postDelayed(950ms) 병행이었는데, 기기의
+     * Animator 배속·절전이 발광만 줄이면 카드가 발광과 겹치거나 먼저
+     * 나왔다(실측: 폴드7 정상, S25 울트라 가끔 역전). 같은 시계를 쓰면
+     * 배속이 어떻든 순서가 불변이다.
+     */
+    private const val CARD_AT_PHASE = 0.68f
+
+    /** 발광이 못 뜨거나 애니메이터가 멎어도 카드는 이 안에 보장한다. */
+    private const val CARD_FALLBACK_MS = 2_500L
 
     fun show(ctx: Context, p: ProposalRow, shortcut: Boolean, anchorPkg: String?) {
         if (!Applier.hasOverlay(ctx)) return
@@ -69,13 +78,23 @@ object SuggestionOverlay {
                 // 이미 동의한 루틴 — 발광 없이 조용히.
                 showCard(app, p, shortcut = true, anchorPkg = anchorPkg)
             } else {
-                showGlow(app)
-                val r = Runnable {
-                    pendingCard = null
-                    showCard(app, p, false, anchorPkg)
+                // 카드 표시는 멱등이어야 한다 — 발광 phase 와 안전망 타이머
+                // 어느 쪽이 먼저 부르든 한 번만 뜬다.
+                val r = object : Runnable {
+                    override fun run() {
+                        if (pendingCard !== this) return
+                        pendingCard = null
+                        showCard(app, p, false, anchorPkg)
+                    }
                 }
                 pendingCard = r
-                main.postDelayed(r, CARD_DELAY_MS)
+                val glowShown = showGlow(app) { phase ->
+                    if (phase >= CARD_AT_PHASE && pendingCard === r) {
+                        main.removeCallbacks(r)
+                        r.run()
+                    }
+                }
+                main.postDelayed(r, if (glowShown) CARD_FALLBACK_MS else 0L)
             }
         }
     }
@@ -89,7 +108,8 @@ object SuggestionOverlay {
      * 실측에서 인지되지 못했다. 숨 쉬듯 두 번 일렁였다가 옅게 가라앉아,
      * 카드가 떠 있는 동안 "지금 화면이 그 대상"임을 계속 알린다.
      */
-    private fun showGlow(ctx: Context) {
+    /** @return 발광 창이 실제로 붙었는가 — 실패면 호출 쪽이 카드를 바로 띄운다 */
+    private fun showGlow(ctx: Context, onPhase: (Float) -> Unit): Boolean {
         val accent = Settings(ctx).accentColor()
         val view = EdgeGlowView(ctx, accent)
         val lp = WindowManager.LayoutParams(
@@ -101,14 +121,36 @@ object SuggestionOverlay {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             android.graphics.PixelFormat.TRANSLUCENT,
         )
-        runCatching { wm(ctx).addView(view, lp) }.onSuccess {
+        return runCatching { wm(ctx).addView(view, lp) }.onSuccess {
             glow = view
-            ValueAnimator.ofFloat(0f, 1f).apply {
+            val anim = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = GLOW_TOTAL_MS
-                addUpdateListener { view.phase = it.animatedValue as Float }
-                start()
+                addUpdateListener {
+                    val v = it.animatedValue as Float
+                    view.phase = v
+                    onPhase(v)
+                }
+                // 배속 0(애니메이션 끔)이면 update 없이 끝날 수 있다 —
+                // end 에서 마지막 phase 를 반드시 알린다.
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(a: android.animation.Animator) {
+                        view.phase = 1f
+                        onPhase(1f)
+                    }
+                })
             }
-        }
+            // 첫 프레임이 실제로 그려질 때 시작한다 — 창 표시가 늦는 기기에서
+            // 애니메이터만 먼저 돌면 발광 앞부분이 보이지 않은 채 소모된다.
+            view.viewTreeObserver.addOnPreDrawListener(
+                object : android.view.ViewTreeObserver.OnPreDrawListener {
+                    override fun onPreDraw(): Boolean {
+                        view.viewTreeObserver.removeOnPreDrawListener(this)
+                        anim.start()
+                        return true
+                    }
+                }
+            )
+        }.isSuccess
     }
 
     /**
@@ -238,7 +280,10 @@ object SuggestionOverlay {
                         p.signature, chosen ?: Applier.params(p).firstOrNull()
                     )
                 }
-                if (!r.ok) toast(ctx, r.message)
+                // 실패뿐 아니라 "적용 대신 안내"(real=false — 편안하게 보기,
+                // 알림 설정 이동 등)도 알린다. 수락을 눌렀는데 조용하면
+                // 그게 고장으로 읽힌다(실측 신고).
+                if (!r.ok || !r.real) toast(ctx, r.message)
             }
         }
 
@@ -438,9 +483,66 @@ object SuggestionOverlay {
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics
     ).toInt()
 
+    private var notice: View? = null
+    private const val NOTICE_MS = 4_200L
+
+    /**
+     * 시스템 토스트 대신 우리 오버레이 알약으로 알린다.
+     *
+     * 오버레이에서 수락하는 순간 이 앱은 백그라운드라, One UI 가 백그라운드
+     * 토스트를 상황에 따라 삼킨다 — "나올 때가 있고 안 나올 때가 있다"의
+     * 원인(실측 신고). 오버레이 권한은 이미 있으니 표시를 우리가 소유한다.
+     * 특히 적용이 불가능한 모드(편안하게 보기 등)의 안내는 반드시 보여야
+     * 한다 — 수락했는데 아무 일도 없으면 그게 고장으로 읽힌다.
+     */
     private fun toast(ctx: Context, msg: String) {
         main.post {
-            android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+            if (!Applier.hasOverlay(ctx)) {
+                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+                return@post
+            }
+            notice?.let { runCatching { wm(ctx).removeView(it) } }
+            val accent = Settings(ctx).accentColor()
+            val v = TextView(ctx).apply {
+                text = msg
+                setTextColor(0xF2FFFFFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                maxWidth = dp(ctx, 320)
+                setPadding(dp(ctx, 18), dp(ctx, 11), dp(ctx, 18), dp(ctx, 11))
+                background = GradientDrawable().apply {
+                    cornerRadius = 999f
+                    setColor(0xF01E1A26.toInt())
+                    setStroke(dp(ctx, 1), withAlpha(accent, 0.45f))
+                }
+                alpha = 0f
+            }
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                overlayType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                android.graphics.PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = dp(ctx, 76)
+            }
+            runCatching { wm(ctx).addView(v, lp) }
+                .onSuccess {
+                    notice = v
+                    v.animate().alpha(1f).setDuration(180).start()
+                    main.postDelayed({
+                        if (notice === v) {
+                            notice = null
+                            v.animate().alpha(0f).setDuration(220).withEndAction {
+                                runCatching { wm(ctx).removeView(v) }
+                            }.start()
+                        }
+                    }, NOTICE_MS)
+                }
+                .onFailure {
+                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+                }
         }
     }
 }

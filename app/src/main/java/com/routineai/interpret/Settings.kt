@@ -102,6 +102,16 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("demo_mode", false)
         set(v) = sp.edit().putBoolean("demo_mode", v).apply()
 
+    /**
+     * 데모 시계 — 앱이 조건 판정·시간 트리거에 쓰는 '시'의 오버라이드.
+     * -1 이면 실제 시각. 시스템 시간이 아니라 앱이 보는 시각만 바뀐다 —
+     * 밤 조건(예: 21-2)이 붙은 제안을 낮 시연에서 발화시키기 위한 것.
+     * 리포트 집계·실험 만료는 실제 시각을 그대로 쓴다.
+     */
+    var demoHour: Int
+        get() = sp.getInt("demo_hour", -1)
+        set(v) = sp.edit().putInt("demo_hour", v).apply()
+
     /** 제안 팝업의 강조색 키. [ACCENTS] 의 항목 중 하나. */
     var accent: String
         get() = sp.getString("accent", DEFAULT_ACCENT).orEmpty().ifBlank { DEFAULT_ACCENT }
