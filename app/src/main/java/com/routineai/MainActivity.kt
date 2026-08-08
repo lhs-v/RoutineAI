@@ -1687,7 +1687,7 @@ class MainActivity : ComponentActivity() {
 
             // ---- 2. 수집 ----
             Section(
-                "2. 수집",
+                "3. 수집",
                 "안드로이드는 사용 이벤트를 며칠치만 보관하다 지웁니다. 이 앱은 주기적으로 " +
                     "읽어 자체 DB에 누적하므로, 오래 쓸수록 분석 가능한 기간이 길어집니다.",
             )
@@ -1728,7 +1728,7 @@ class MainActivity : ComponentActivity() {
 
             // ---- 3. 분석 연결 ----
             Section(
-                "3. 분석 연결 (선택)",
+                "4. 분석 연결 (선택)",
                 "비워두면 앱은 완전히 오프라인으로 동작합니다. 채우면 제안 탭에서 " +
                     "집계 결과를 Azure OpenAI 에 보내 루틴 제안을 받을 수 있습니다.",
             )
@@ -1796,7 +1796,7 @@ class MainActivity : ComponentActivity() {
             // 리허설을 처음부터 다시 하려면 어디까지 되돌릴지 고를 수 있어야 한다.
             // 수집한 로그까지 지우면 다시 며칠 기다려야 하므로 단계를 나눈다.
             Section(
-                "4. 데모 초기화",
+                "5. 데모 초기화",
                 "리허설을 처음 상태로 되돌립니다. 수집한 로그는 건드리지 않습니다.",
             )
             var resetMsg by remember { mutableStateOf("") }

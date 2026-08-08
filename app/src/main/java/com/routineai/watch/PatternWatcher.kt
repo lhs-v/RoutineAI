@@ -36,6 +36,15 @@ import kotlinx.serialization.json.Json
  * 앱 맥락 모드(app_mode)는 진입/이탈이 쌍이라 따로 다룬다 — 들어갈 때 설정을
  * 바꾸고 나올 때 되돌린다. 되돌리지 않으면 사용자의 기기 설정을 몰래 바꿔놓은
  * 셈이 되므로, 이탈 복구는 선택이 아니라 필수다.
+ *
+ * ## 발화 조건을 바꾸면 함께 고쳐야 하는 곳
+ *
+ * 조건이 네 곳에 복제돼 있다. 코드만 고치면 화면이 조건을 거짓으로 설명하게
+ * 되는데, 그 정직함이 이 앱의 기능이라 특히 조심할 것:
+ *  - [dispatch] — 실제 발화 검사(수락 루프·후보 루프 두 곳. 페어 게이트는 짝)
+ *  - [whyQuiet] — 카드의 "지금은 조용: …" 진단. dispatch 를 읽기 전용으로 재현
+ *  - `MainActivity.flowSummary` — 카드의 "무엇이 일어나면 · 무엇을 한다" 한 줄
+ *  - `SuggestionOverlay.triggerLabel` — 팝업 상단의 트리거 문구
  */
 object PatternWatcher {
 
@@ -79,7 +88,14 @@ object PatternWatcher {
     /** 앱별 마지막 목격 시각 — 앱페어의 "이미 함께 쓰는 중" 판정 재료 */
     private val pkgLastSeen = HashMap<String, Long>()
 
-    /** 이 안에 상대 앱을 썼다면 페어를 이미 함께 쓰는 중이다 — 제안이 무의미 */
+    /**
+     * 페어의 "한 흐름" 창. 한 상수가 두 역할을 겸한다:
+     *   1) **증명 창** — 이 안에 상대 앱을 썼어야 전환으로 인정한다(발화 조건)
+     *   2) **억제 창** — 그 흐름 안에서는 한 번만 묻는다(재발화 방지)
+     * 3분은 실측 근거가 아니라 "왕복 한 세션"의 대략치다. 조건을 바꿔 두
+     * 역할이 갈라지면 상수를 둘로 나눠라. [REPEAT_GAP_MS](20초)와는 층이
+     * 다르다 — 그쪽은 모든 제안 공통의 연타 방지고, 이쪽은 페어 전용이다.
+     */
     private const val PAIR_FLOW_MS = 3L * 60 * 1000
 
     // ---- 루틴 중심 로그: 루틴 자체의 삶을 기록한다 ----
@@ -387,10 +403,12 @@ object PatternWatcher {
             if (triggerType == "app_launch" && p.actionType != "app_pair" &&
                 (!visitOpening || reenteredRecently)
             ) continue
-            // 후보 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온
-            // 그 순간이 "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은
-            // 대부분 다른 용무라 소음이다. (수락 뒤에는 반대로 첫 실행에
-            // 묻는다 — 왕복이 시작되기 전에 없애는 것이 세트의 목적이라.)
+            // 페어는 전환 순간에만 묻는다 — 상대 앱을 방금 쓰고 온 그 순간이
+            // "이 왕복, 나란히 볼까요?"의 증명이다. 단독 실행은 대부분 다른
+            // 용무라 소음이다. **수락 뒤에도 같은 조건이다** — 한때 수락된
+            // 페어는 첫 실행에 물었지만(왕복이 시작되기 전에 없앤다는 논리),
+            // 사용자 결정으로 후보 쪽 조건에 통일했다. 위 accepted 루프의
+            // 같은 게이트와 짝이니 한쪽만 고치지 마라.
             if (p.actionType == "app_pair" && triggerType == "app_launch") {
                 val partner = Applier.params(p).firstOrNull { it != param }
                 if (partner == null || now - (pkgLastSeen[partner] ?: 0L) >= PAIR_FLOW_MS) continue

@@ -37,6 +37,12 @@ Weekdays`, `PatternWatcher.inCondition`). 결정 로그에는 8축(시각·요�
 - 앱 쪽 변화: `inCondition` 을 표현식 평가기로 교체(축 이름 → 그 순간의
   스냅샷 필드 조회, `eq/ne/in` 세 연산이면 충분). `ProposalRow` 에는
   표현식 JSON 컬럼 하나만.
+- **착수 범위는 그 컬럼 하나로 끝나지 않는다.** 함께 바뀌는 곳:
+  `Db.version` 승격 + `AutoMigration(10→11)` + `app/schemas/11.json` 커밋
+  (기존 관례 그대로) · `deep-analysis.md` 의 조건 형식과 출력 스키마
+  (`conditionHours`/`conditionWeekdays` → 표현식) · `start_experiment`
+  도구 인자와 `DeepAnalyzer.valid()` · 그리고 조건을 화면에 설명하는 네
+  지점(`PatternWatcher` 상단 KDoc 의 "함께 고쳐야 하는 곳" 목록 참고).
 - 축 추가 = 스냅샷([DecisionContext.capture])에 필드 하나 추가일 뿐,
   스키마·도구·지침 확장이 필요 없다. 에이전트는 입력에서 본 축 이름을
   그대로 조건에 쓴다.
