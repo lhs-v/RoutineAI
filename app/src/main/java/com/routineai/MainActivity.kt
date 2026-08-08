@@ -186,6 +186,7 @@ class MainActivity : ComponentActivity() {
         val overlayOk = remember(permTick) { Applier.hasOverlay(ctx) }
         val a11yOk = remember(permTick) { Applier.hasAccessibility(ctx) }
         val writeOk = remember(permTick) { android.provider.Settings.System.canWrite(ctx) }
+        val batteryOk = remember(permTick) { Permissions.isBatteryUnrestricted(ctx) }
         val btOk = remember(permTick) {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                 ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
@@ -363,7 +364,7 @@ class MainActivity : ComponentActivity() {
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
                             btOk = btOk, healthOk = healthOk, prefs = prefs,
                             overlayOk = overlayOk, a11yOk = a11yOk, writeOk = writeOk,
-                            status = status,
+                            batteryOk = batteryOk, status = status,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -1385,7 +1386,7 @@ class MainActivity : ComponentActivity() {
     private fun SettingsTab(
         usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
         btOk: Boolean, healthOk: Boolean, busy: Boolean, prefs: Settings,
-        overlayOk: Boolean, a11yOk: Boolean, writeOk: Boolean,
+        overlayOk: Boolean, a11yOk: Boolean, writeOk: Boolean, batteryOk: Boolean,
         status: CollectStatus?,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
@@ -1495,6 +1496,45 @@ class MainActivity : ComponentActivity() {
 
             // ---- 1. 권한 ----
             Section("1. 권한", "설치만으로는 아무것도 켜지지 않습니다. 직접 허용해야 합니다.")
+            // 감시가 살아 있는가 — 권한이 다 켜져 있어도 서비스가 죽어 있으면
+            // 아무것도 안 뜬다(실측: 절전이 거둬 간 뒤 하루치 트리거 유실).
+            // 상태와 되살리는 법을 권한 목록 맨 앞에 둔다.
+            val watchRunning = com.routineai.watch.WatchService.isRunning
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Dot(if (watchRunning) OK else NEED)
+                        Spacer(Modifier.size(8.dp))
+                        Text("실시간 감지", fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (watchRunning) "동작 중" else "꺼짐",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (watchRunning) OK else NEED,
+                        )
+                    }
+                    Text(
+                        if (watchRunning)
+                            "앱 전환·블루투스·Wi-Fi·시각을 지켜보고 있습니다." +
+                                if (!batteryOk) " 절전 예외를 켜지 않으면 시스템이 이 감시를 " +
+                                    "언제든 거둬 갈 수 있고, 그러면 앱을 다시 열기 전까지 제안이 뜨지 않습니다." else ""
+                        else
+                            "감시가 꺼져 있어 제안이 뜨지 않습니다. 이 화면을 열었으니 곧 다시 시작됩니다 — " +
+                                "반복된다면 아래 절전 예외를 켜주세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (watchRunning) MaterialTheme.colorScheme.onSurfaceVariant else NEED,
+                    )
+                }
+            }
+            PermCard(
+                title = "절전 예외",
+                required = false,
+                granted = batteryOk,
+                what = "감시 서비스가 절전에 거둬지지 않게 합니다.",
+                without = "며칠 뒤 조용히 감지가 멈추고, 앱을 열어야 다시 켜집니다.",
+                where = "아래 버튼 → '허용'",
+                onClick = { Permissions.requestBatteryUnrestricted(ctx) },
+            )
             if (!usageOk) {
                 Notice(
                     NEED,

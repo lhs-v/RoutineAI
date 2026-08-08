@@ -42,6 +42,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- 절전 예외 요청. 이게 없으면 시스템이 감시 서비스를 거둬 가고, 앱을
+         다시 열기 전까지 트리거가 통째로 죽는다(실측). 개인용 사이드로드
+         기준의 선언이며, 스토어 배포 시에는 심사 대상입니다. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
     <!-- 블루투스 연결/해제 기록. 기기 이름을 읽으려면 런타임 허용이 필요합니다. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
@@ -69,6 +75,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 재부팅·앱 교체 후 감시 재시작. 이게 없으면 절전이 서비스를 거둔 뒤
+             사용자가 앱을 열기 전까지 감지가 죽어 있다(실측). -->
+        <receiver
+            android:name=".collect.BootReceiver"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- BT 연결/해제. ACL 브로드캐스트는 암시적 제한 예외라 매니페스트 리시버로 받는다. -->
         <receiver android:name=".collect.BtReceiver" android:exported="false">

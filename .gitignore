@@ -19,7 +19,13 @@ build/
 
 # 데모 로그. 실제 기기에서 뽑은 사용 기록이라 저장소에 올리지 않는다.
 # 넣는 방법은 BUILD.md 참고. 없으면 설정 탭의 데모 토글이 꺼진 채 잠긴다.
-app/src/main/assets/demo/routine.db
+#
+# 정확한 파일명만 막으면 "routine - 복사본.db" 같은 변형이 새어 나간다 —
+# 실측으로 두 번 겪었다(두 번째는 이 줄을 PowerShell `>>` 로 덧붙였다가
+# UTF-16 으로 저장되어 git 이 패턴 자체를 못 읽었다). 확장자로 막는다.
+app/src/main/assets/demo/*.db
+app/src/main/assets/demo/*.db-wal
+app/src/main/assets/demo/*.db-shm
 
 # 삼성 루틴 공유 파일. 포맷 분석용으로만 받았고 저장소에 두지 않는다.
 *.rtn
