@@ -165,14 +165,13 @@ def backfill(buckets):
     return con
 
 
-# 데모에서 빼기로 한 앱. 사용 이벤트·알림·통신량 어디에도 안 나오게 지운다.
+# 데모에서 뺄 앱. 사용 이벤트·알림·통신량 어디에도 안 나오게 지운다.
 # 도구가 지우므로 재추출해도 다시 적용된다.
-# **기기 주인이 직접 정하는 값이다** — 여기 적힌 것은 예시일 뿐이니, 남에게
-# 보이고 싶지 않은 앱이 있으면 자기 목록으로 바꿔라(--exclude 로도 준다).
-EXCLUDE_PKGS = [
-    "com.example.browser",
-    "com.example.social",
-]
+#
+# **기본값은 비운다.** 여기에 목록을 적어 두면 그 자체가 "이 기기 주인이
+# 감추고 싶어한 앱"이라는 개인 정보가 되어 저장소에 박힌다. 뺄 앱은
+# `--exclude <패키지>` 로 실행할 때마다 준다(여러 번 지정 가능).
+EXCLUDE_PKGS: list[str] = []
 
 # 삭제된 앱은 pm 으로 uid 를 되돌릴 수 없어 통신량에서 패키지명으로 지울 수
 # 없다. 그럴 때만 uid 를 직접 적는다 — 기기 설정의 앱별 통신량과 DB 의 uid 별
@@ -183,26 +182,29 @@ EXCLUDE_UIDS: list[int] = []
 
 def exclude_pkgs(adb_path):
     """데모 제외 앱의 흔적을 모든 테이블에서 지운다. 통신량은 uid 로 지운다."""
+    if not EXCLUDE_PKGS and not EXCLUDE_UIDS:
+        return   # 빈 IN () 은 SQL 문법 오류다. 지울 게 없으면 손대지 않는다.
     con = sqlite3.connect(ASSET)
     uids = list(EXCLUDE_UIDS)
-    out = subprocess.run([adb_path, "shell", "pm", "list", "packages", "-U"],
-                         capture_output=True)
-    for line in out.stdout.decode(errors="replace").splitlines():
-        m = re.match(r"package:(\S+) uid:(\d+)", line.strip())
-        if m and m.group(1) in EXCLUDE_PKGS:
-            uids.append(int(m.group(2)))
+    if EXCLUDE_PKGS:
+        out = subprocess.run([adb_path, "shell", "pm", "list", "packages", "-U"],
+                             capture_output=True)
+        for line in out.stdout.decode(errors="replace").splitlines():
+            m = re.match(r"package:(\S+) uid:(\d+)", line.strip())
+            if m and m.group(1) in EXCLUDE_PKGS:
+                uids.append(int(m.group(2)))
 
-    qmarks = ",".join("?" * len(EXCLUDE_PKGS))
-    a = con.execute(f"DELETE FROM usage_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
-    b = con.execute(f"DELETE FROM notif_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
-    c = 0
+    a = b = c = 0
+    if EXCLUDE_PKGS:
+        qmarks = ",".join("?" * len(EXCLUDE_PKGS))
+        a = con.execute(f"DELETE FROM usage_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
+        b = con.execute(f"DELETE FROM notif_event WHERE pkg IN ({qmarks})", EXCLUDE_PKGS).rowcount
     if uids:
         c = con.execute(
             "DELETE FROM net_bucket WHERE uid IN (%s)" % ",".join("?" * len(uids)),
             uids).rowcount
     con.commit(); con.close()
-    print(f"데모 제외 앱 정리: usage {a}, notif {b}, net {c}행 "
-          f"({', '.join(p.split('.')[-1] for p in EXCLUDE_PKGS)})")
+    print(f"데모 제외 앱 정리: usage {a}, notif {b}, net {c}행")
 
 
 def backfill_bt(adb_path):
