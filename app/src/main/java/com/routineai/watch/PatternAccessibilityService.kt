@@ -180,16 +180,9 @@ class PatternAccessibilityService : AccessibilityService() {
         @Volatile
         private var instance: PatternAccessibilityService? = null
 
-        /**
-         * 분할화면 토글.
-         *
-         * 실측: 삼성 One UI 는 이 전역 동작을 거부한다(a11y 는 붙어 있는데
-         * false 반환). 화면이 좁아서인지 기기 정책인지는 반환값만으로 알 수
-         * 없어, 호출부가 실패를 그대로 받아 순차 실행으로 떨어지게 한다.
-         */
-        fun toggleSplitScreen(): Boolean = runCatching {
-            instance?.performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) ?: false
-        }.getOrDefault(false)
+        // GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN 을 쓰던 toggleSplitScreen() 은
+        // 제거했다 — One UI 가 이 전역 동작을 거부한다(README '실측으로
+        // 확정한 플랫폼 한계'). 지금은 아래 최근앱 자동화가 그 자리를 맡는다.
 
         /**
          * 최근앱 메뉴를 눌러 [anchorLabel] 과 [otherLabel] 을 분할화면으로 만든다.

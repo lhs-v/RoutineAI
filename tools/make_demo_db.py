@@ -20,6 +20,7 @@ import argparse
 import datetime
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -50,27 +51,35 @@ def adb():
 
 
 def pull_db(adb_path):
-    """앱 DB 를 WAL 포함해 뽑아 단일 파일로 정리한 뒤 에셋 자리에 둔다."""
-    tmp = ASSET + ".pull"
-    for suffix in ("", "-wal", "-shm"):
-        out = subprocess.run(
-            [adb_path, "exec-out", "run-as", PKG, "cat", f"databases/routine.db{suffix}"],
-            capture_output=True)
-        if out.returncode != 0 and suffix == "":
-            sys.exit("DB 를 뽑지 못했습니다: " + out.stderr.decode(errors="replace"))
-        with open(tmp + suffix, "wb") as f:
-            f.write(out.stdout)
-    con = sqlite3.connect(tmp)
-    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    os.makedirs(os.path.dirname(ASSET), exist_ok=True)
-    if os.path.exists(ASSET):
-        os.remove(ASSET)
-    con.execute("VACUUM INTO ?", (ASSET.replace(os.sep, "/"),))
-    con.close()
-    # sqlite 가 연결을 닫으며 -wal/-shm 을 스스로 지울 수 있다.
-    for suffix in ("", "-wal", "-shm"):
-        if os.path.exists(tmp + suffix):
-            os.remove(tmp + suffix)
+    """앱 DB 를 WAL 포함해 뽑아 단일 파일로 정리한 뒤 에셋 자리에 둔다.
+
+    중간 파일은 **저장소 밖**(임시 디렉터리)에 둔다. 예전에는 에셋 옆에
+    routine.db.pull 로 떨어뜨렸는데, 그 이름은 확장자 기반 .gitignore 를
+    빠져나가고 sqlite 단계가 예외로 죽으면 정리되지 않은 채 남는다 —
+    스크러빙 이전의 기기 원본이 git status 에 추적 대상으로 뜨는 상태다.
+    netstats 덤프가 같은 이유로 이미 임시 디렉터리를 쓰고 있었다.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="routineai-pull-")
+    tmp = os.path.join(tmpdir, "routine.db")
+    try:
+        for suffix in ("", "-wal", "-shm"):
+            out = subprocess.run(
+                [adb_path, "exec-out", "run-as", PKG, "cat", f"databases/routine.db{suffix}"],
+                capture_output=True)
+            if out.returncode != 0 and suffix == "":
+                sys.exit("DB 를 뽑지 못했습니다: " + out.stderr.decode(errors="replace"))
+            with open(tmp + suffix, "wb") as f:
+                f.write(out.stdout)
+        con = sqlite3.connect(tmp)
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        os.makedirs(os.path.dirname(ASSET), exist_ok=True)
+        if os.path.exists(ASSET):
+            os.remove(ASSET)
+        con.execute("VACUUM INTO ?", (ASSET.replace(os.sep, "/"),))
+        con.close()
+    finally:
+        # 예외로 죽어도 기기 원본이 디스크에 남지 않게 한다.
+        shutil.rmtree(tmpdir, ignore_errors=True)
     print(f"에셋 갱신: {os.path.getsize(ASSET):,} 바이트")
 
 
@@ -158,15 +167,18 @@ def backfill(buckets):
 
 # 데모에서 빼기로 한 앱. 사용 이벤트·알림·통신량 어디에도 안 나오게 지운다.
 # 도구가 지우므로 재추출해도 다시 적용된다.
+# **기기 주인이 직접 정하는 값이다** — 여기 적힌 것은 예시일 뿐이니, 남에게
+# 보이고 싶지 않은 앱이 있으면 자기 목록으로 바꿔라(--exclude 로도 준다).
 EXCLUDE_PKGS = [
     "com.example.browser",
     "com.example.social",
 ]
 
-# 삭제된 앱은 pm 으로 uid 를 되돌릴 수 없다. 기기 화면의 앱별 통신량과 DB 의
-# uid 별 합계를 대조해 확정한 값 (앱 A=10001, 앱 B=10002 — 이웃
-# uid 들도 전부 화면 값과 일치함을 확인).
-EXCLUDE_UIDS = [10001, 10002]
+# 삭제된 앱은 pm 으로 uid 를 되돌릴 수 없어 통신량에서 패키지명으로 지울 수
+# 없다. 그럴 때만 uid 를 직접 적는다 — 기기 설정의 앱별 통신량과 DB 의 uid 별
+# 합계를 대조해 확정하면 된다. **uid 는 기기마다 다르므로 기본값은 비운다**
+# (남의 기기에서 돌리면 엉뚱한 앱의 통신량이 지워진다). --exclude-uid 로 준다.
+EXCLUDE_UIDS: list[int] = []
 
 
 def exclude_pkgs(adb_path):
@@ -475,9 +487,15 @@ if __name__ == "__main__":
                     help="시작점 통일(사용 이벤트 이전 구간 제거)을 건너뛴다")
     ap.add_argument("--synth-bt", action="store_true",
                     help="사용자가 밝힌 이어폰 습관을 실행 시각에 앵커해 합성 (majorClass=-1 표시)")
+    ap.add_argument("--exclude", action="append", default=[], metavar="PKG",
+                    help="데모에서 뺄 앱 패키지 (여러 번 지정 가능)")
+    ap.add_argument("--exclude-uid", action="append", type=int, default=[], metavar="UID",
+                    help="삭제된 앱이라 패키지명으로 못 지울 때의 uid (기기마다 다름)")
     ap.add_argument("--synth-shopping", action="store_true",
                     help="쇼핑 페어(평일 저녁 쿠팡↔네이버쇼핑, 주말 당근↔번개장터) 합성")
     args = ap.parse_args()
+    EXCLUDE_PKGS.extend(args.exclude)
+    EXCLUDE_UIDS.extend(args.exclude_uid)
 
     a = None if (args.no_pull and args.dump) else adb()
     if not args.no_pull:

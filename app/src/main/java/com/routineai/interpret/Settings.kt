@@ -119,8 +119,13 @@ class Settings(ctx: Context) {
 
     fun accentColor(): Int = ACCENTS[accent] ?: ACCENTS.getValue(DEFAULT_ACCENT)
 
-    /** 데모를 처음부터 다시 보여줄 때 화면 상태까지 되돌린다. */
+    /**
+     * 데모를 처음부터 다시 보여줄 때 화면 상태까지 되돌린다.
+     * 데모 시계도 함께 끈다 — 켜둔 채 잊으면 그 뒤의 모든 결정 기록에
+     * 가짜 시각이 박혀 심층 분석의 입력이 조용히 오염된다.
+     */
     fun clearReportAndAnalysis() {
+        demoHour = -1
         lastReport = ""
         lastReportAt = 0L
         lastAnalysisAt = 0L

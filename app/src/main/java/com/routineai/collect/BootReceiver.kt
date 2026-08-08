@@ -19,13 +19,16 @@ import com.routineai.watch.WatchService
  * (specialUse)은 Android 15 의 부팅 시작 제한 목록에도 없다. 그래도
  * 제조사가 거부할 수 있으므로 실패는 로그로만 남기고 조용히 넘어간다 —
  * 그때는 사용자가 앱을 한 번 열면 살아난다.
+ *
+ * LOCKED_BOOT_COMPLETED 는 일부러 받지 않는다. 잠금 해제 전에는 기기 암호화
+ * 저장소가 잠겨 있어 [com.routineai.RoutineApp] 의 WorkManager·Room 초기화가
+ * 실패하고, 리시버가 뜨자마자 프로세스가 죽는다.
  */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(ctx: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
             -> {
                 Log.i(TAG, "감시 재시작 시도: ${intent.action}")

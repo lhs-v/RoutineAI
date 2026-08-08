@@ -187,6 +187,10 @@ class MainActivity : ComponentActivity() {
         val a11yOk = remember(permTick) { Applier.hasAccessibility(ctx) }
         val writeOk = remember(permTick) { android.provider.Settings.System.canWrite(ctx) }
         val batteryOk = remember(permTick) { Permissions.isBatteryUnrestricted(ctx) }
+        val dndOk = remember(permTick) {
+            (ctx.getSystemService(android.content.Context.NOTIFICATION_SERVICE)
+                as android.app.NotificationManager).isNotificationPolicyAccessGranted
+        }
         val btOk = remember(permTick) {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                 ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
@@ -364,7 +368,7 @@ class MainActivity : ComponentActivity() {
                             usageOk = usageOk, notifOk = notifOk, locOk = locOk,
                             btOk = btOk, healthOk = healthOk, prefs = prefs,
                             overlayOk = overlayOk, a11yOk = a11yOk, writeOk = writeOk,
-                            batteryOk = batteryOk, status = status,
+                            batteryOk = batteryOk, dndOk = dndOk, status = status,
                             busy = busy, collectMsg = collectMsg, azure = azure,
                             demo = demo, demoAvailable = demoAvailable,
                             onDemoChange = {
@@ -1387,6 +1391,7 @@ class MainActivity : ComponentActivity() {
         usageOk: Boolean, notifOk: Boolean, locOk: Boolean,
         btOk: Boolean, healthOk: Boolean, busy: Boolean, prefs: Settings,
         overlayOk: Boolean, a11yOk: Boolean, writeOk: Boolean, batteryOk: Boolean,
+        dndOk: Boolean,
         status: CollectStatus?,
         collectMsg: String, azure: AzureConfig, demo: Boolean, demoAvailable: Boolean,
         onPermChanged: () -> Unit, onAzureChange: (AzureConfig) -> Unit,
@@ -1526,6 +1531,15 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            PermCard(
+                title = "방해금지 제어",
+                required = false,
+                granted = dndOk,
+                what = "앱 맥락 모드가 방해금지를 켜고, 앱을 떠나면 되돌립니다.",
+                without = "방해금지 제안이 안내로만 남습니다.",
+                where = "아래 버튼 → RoutineAI 허용",
+                onClick = { Applier.dndAccessSettings(ctx) },
+            )
             PermCard(
                 title = "절전 예외",
                 required = false,
